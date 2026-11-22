@@ -58,4 +58,4 @@ The first public release.
   the container image and the npm package.
 - MIT license, contributing guide, security policy and architecture notes.
 
-[1.0.0]: https://github.com/OWNER/fryday-code/releases/tag/v1.0.0
+[1.0.0]: https://github.com/MONU8OO8/fryday-code/releases/tag/v1.0.0

@@ -7,7 +7,7 @@ security bug.
 ## Reporting a vulnerability
 
 Please report privately, through GitHub: **Security → Report a vulnerability** on
-[the repository](https://github.com/OWNER/fryday-code/security/advisories/new). Do not open a public
+[the repository](https://github.com/MONU8OO8/fryday-code/security/advisories/new). Do not open a public
 issue for it.
 
 Include what you did, what you expected the limit to stop, and what got through (a red-team probe

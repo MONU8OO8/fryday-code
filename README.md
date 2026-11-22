@@ -10,14 +10,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/OWNER/fryday-code/actions/workflows/ci.yml"><img src="https://github.com/OWNER/fryday-code/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/MONU8OO8/fryday-code/actions/workflows/ci.yml"><img src="https://github.com/MONU8OO8/fryday-code/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22.12-339933.svg" alt="Node 22.12 or newer">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Docker-lightgrey.svg" alt="macOS, Linux, Docker">
 </p>
 
 <p align="center">
-  <a href="https://OWNER.github.io/fryday-code/"><b>Try the live demo</b></a> ·
+  <a href="https://monu8oo8.github.io/fryday-code/"><b>Try the live demo</b></a> ·
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#safe-by-design">Safe by design</a> ·
@@ -36,7 +36,7 @@ Every agent works in a sandbox, in a copy of your repository; your own checkout 
 
 ## Try the live demo
 
-**[OWNER.github.io/fryday-code](https://OWNER.github.io/fryday-code/)** replays a recorded task in
+**[monu8oo8.github.io/fryday-code](https://monu8oo8.github.io/fryday-code/)** replays a recorded task in
 your browser: a question for you, a plan, a first build that fails the tests, a fix, a check, then your
 approval. It needs no account, makes no AI calls and sends nothing anywhere.
 
@@ -192,7 +192,7 @@ Or install it for good with `npm install -g fryday-code`, then run `fryday-code`
 **From a clone:**
 
 ```bash
-git clone https://github.com/OWNER/fryday-code.git
+git clone https://github.com/MONU8OO8/fryday-code.git
 cd fryday-code
 npm run setup     # install both packages and build the UI (once, and after pulling changes)
 npm start         # start FryDay Code on http://127.0.0.1:7475
@@ -451,7 +451,7 @@ in the `fryday-state` volume. If git in the container calls a repository "dubiou
 id is not 1000: run `docker compose exec fryday git config --global --add safe.directory
 /home/node/projects/<name>`.
 
-Release images are published to `ghcr.io/OWNER/fryday-code` for each version tag.
+Release images are published to `ghcr.io/monu8oo8/fryday-code` for each version tag.
 
 The port is published on `127.0.0.1` only, and the host port must be the same as `FRYDAY_PORT`
 (default 7475): core accepts requests only addressed to `127.0.0.1:<port>` or `localhost:<port>`.

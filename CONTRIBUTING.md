@@ -10,7 +10,7 @@ You need Node.js 22.12 or newer and git. On Linux you also need `bubblewrap`, `s
 (see [Linux and Docker](README.md#linux-and-docker) in the README).
 
 ```bash
-git clone https://github.com/OWNER/fryday-code.git
+git clone https://github.com/MONU8OO8/fryday-code.git
 cd fryday-code
 npm run setup     # install core and ui, build the UI into core/public
 npm run doctor    # what works on this machine, with the command that fixes each problem

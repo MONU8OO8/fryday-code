@@ -17,12 +17,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/fryday-code.git",
+    "url": "git+https://github.com/MONU8OO8/fryday-code.git",
     "directory": "core"
   },
-  "homepage": "https://github.com/OWNER/fryday-code#readme",
+  "homepage": "https://github.com/MONU8OO8/fryday-code#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/fryday-code/issues"
+    "url": "https://github.com/MONU8OO8/fryday-code/issues"
   },
   "type": "commonjs",
   "bin": {
