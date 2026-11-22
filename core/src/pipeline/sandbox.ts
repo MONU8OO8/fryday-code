@@ -129,7 +129,7 @@ export function sandboxSettings(workspacePath: string, tmpDir: string, extraRead
     // kernel.apparmor_restrict_unprivileged_userns=0. Skip the seccomp layer; bwrap
     // still enforces all filesystem and network restrictions. Unix-socket blocking
     // (the only thing the seccomp layer adds) is not tested by npm test.
-    ...(process.platform === 'linux' && process.env['CI'] === '1' ? { allowAllUnixSockets: true } : {}),
+    ...(process.platform === 'linux' && process.env['CI'] ? { allowAllUnixSockets: true } : {}),
     // Docker only: see platform.ts.
     ...nestedSandbox(),
   };
