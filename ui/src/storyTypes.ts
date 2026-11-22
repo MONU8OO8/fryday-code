@@ -49,6 +49,13 @@ export interface TaskStory {
   now: StoryNow | null;
   /** What the owner may ask for again: release → POST /api/tasks/:id/approval, deploy → POST /api/tasks/:id/deploy. */
   askAgain: 'release' | 'deploy' | null;
+  /**
+   * A task that stopped at the round limit. tryAgain → POST /api/tasks/:id/try-again { note? };
+   * accept → POST /api/tasks/:id/accept. why: the Checker's own words.
+   */
+  choices: { tryAgain: boolean; accept: boolean; why: string | null };
+  /** Its work was discarded: nothing more can happen on it. */
+  discarded?: boolean;
 }
 
 export interface OverviewItem {

@@ -37,7 +37,8 @@ process.env.FRYDAY_RETRY_BACKOFF_MS = '0';
 import { initDb, getDb } from '../src/db/db';
 import { overrideRepo, saveProject } from '../src/registry/registry';
 import { activeRunIds, stopFollowing } from '../src/runner/supervisor';
-import { startTask, registerPipeline, StartError } from '../src/pipeline/pipeline';
+import { startTask, registerPipeline, StartError, stoppedChoices, tryAgainAfterStop, acceptAsItIs, StoppedError } from '../src/pipeline/pipeline';
+import { addMessage } from '../src/pipeline/thread';
 import { getWorkspaces, discardWorkspaces, readGuidance } from '../src/pipeline/workspaces';
 import { getRounds } from '../src/pipeline/rounds';
 import { getTask, setTaskState } from '../src/pipeline/taskState';
@@ -246,11 +247,61 @@ test('after the round limit the task goes to the owner with the reason', { skip 
   assert.equal(await runToRest(id), 'needs_owner');
   assert.deepEqual(outcomes(id), ['changes_requested', 'changes_requested', 'escalated']);
   assert.equal(note(id), 'Still not passing after 3 rounds — failing checks: test');
+  // A failing check is not a judgement the owner can overrule; one more round is all they can ask for.
+  assert.deepEqual(stoppedChoices(id), { tryAgain: true, accept: false, why: null });
+  assert.throws(() => acceptAsItIs(id), StoppedError);
   assert.equal(calls().filter((c) => c.role === 'coder').length, 3);
   assert.equal(calls().filter((c) => c.role === 'tester').length, 0);
   // The work stays on the branch for the owner to look at.
   const [ws] = getWorkspaces(id);
   assert.equal(sh(main, 'rev-list', '--count', `${ws!.base_sha}..${ws!.branch}`), '1');
+});
+
+// The Checker keeps saying no to work whose checks pass (T-1 on a real repo: a lint criterion
+// that repo cannot meet). The owner decides: accept it as it is, or one more round with a note.
+const neverPasses = {
+  verdict: 'fail', summary: 'The code is right, but npm run lint cannot pass in this repo.',
+  criteria: PLAN.criteria.map((criterion, i) => ({ criterion, met: i > 0, evidence: 'ran it' })),
+  issues: [],
+};
+
+test('a task the Checker keeps rejecting can be accepted as it is, and goes on to the usual approval', { skip }, async () => {
+  script({ coder: [good], tester: [neverPasses] });
+  const id = addTask('Add mul the Checker will not pass');
+  assert.equal(await runToRest(id), 'needs_owner');
+  assert.deepEqual(outcomes(id), ['changes_requested', 'changes_requested', 'escalated']);
+  assert.deepEqual(stoppedChoices(id), { tryAgain: true, accept: true, why: neverPasses.summary });
+
+  acceptAsItIs(id);
+  assert.equal(getTask(id)!.state, 'awaiting_approval');
+  assert.deepEqual(outcomes(id), ['changes_requested', 'changes_requested', 'accepted']);
+  // Accepting pushes nothing: the next step is the one a passed round gets. This project has no
+  // staging branch, so (as for a passed round) the branch is simply ready and no ticket is raised.
+  assert.match(note(id), /^You accepted the change as it is, with the Checker's open points\. The branch is ready\./);
+  assert.equal(latestApproval(id), undefined);
+  assert.deepEqual(stoppedChoices(id), { tryAgain: false, accept: false, why: null }, 'nothing left to decide');
+  assert.throws(() => acceptAsItIs(id), StoppedError);
+  await assert.rejects(tryAgainAfterStop(id), StoppedError);
+});
+
+test('trying again gives the Builder one more round, and the Checker reads what the owner wrote', { skip }, async () => {
+  script({ coder: [good], tester: [neverPasses, neverPasses, neverPasses, pass] });
+  const id = addTask('Add mul, then waive the lint point');
+  assert.equal(await runToRest(id), 'needs_owner');
+  addMessage(id, 'owner', 'note', 'Skip the lint check: this project has no lint set up.');
+  await tryAgainAfterStop(id);
+  assert.equal(getTask(id)!.state, 'coding');
+  await assert.rejects(tryAgainAfterStop(id), StoppedError, 'a second press while it runs does nothing');
+  while (getTask(id)!.state !== 'awaiting_approval' || activeRunIds().length > 0) {
+    assert.notEqual(getTask(id)!.state, 'failed', note(id));
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.deepEqual(outcomes(id), ['changes_requested', 'changes_requested', 'escalated', 'passed']);
+  const coders = calls().filter((c) => c.role === 'coder');
+  assert.equal(coders.length, 4);
+  assert.match(coders.at(-1)!.prompt, /Skip the lint check/, 'the Builder is told');
+  const brief = calls().filter((c) => c.role === 'tester').at(-1)!.files!.brief;
+  assert.match(brief, /## What the owner said[\s\S]*Skip the lint check: this project has no lint set up\./, 'so is the Checker');
 });
 
 test('a check that already failed before the task does not block it', { skip }, async () => {

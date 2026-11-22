@@ -20,7 +20,7 @@ import { git, gitAsync, GitError } from './worktrees.js';
 import { branchFacts } from './branches.js';
 import { withRepoLock } from './repoLock.js';
 import { ApprovalError, raiseTicket, requestReleaseApproval, type ApprovalRow } from './approvals.js';
-import { getRounds } from './rounds.js';
+import { getRounds, roundCleared } from './rounds.js';
 import { verifiedPhrase } from '../verify/report.js';
 
 const short = (sha: string | null | undefined) => (sha ?? '').slice(0, 8);
@@ -48,7 +48,7 @@ export function requestBranchPush(taskId: string): ApprovalRow {
   const ws = activeWorkspace(taskId);
   if (!ws?.head_sha || !ws.target_branch) throw new ApprovalError(409, `${taskId} does not continue an existing branch`);
   const rounds = getRounds(taskId);
-  if (rounds[rounds.length - 1]?.outcome !== 'passed') throw new ApprovalError(409, `${taskId} has not passed checks and review`);
+  if (!roundCleared(rounds[rounds.length - 1]?.outcome)) throw new ApprovalError(409, `${taskId} has not passed checks and review`);
   const repo = getRepo(ws.repo_id);
   const commits = Number(git(ws.repo_path, ['rev-list', '--count', `${ws.base_sha}..${ws.head_sha}`]));
   const owned = ws.target_owned === 1;

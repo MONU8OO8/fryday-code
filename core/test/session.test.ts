@@ -71,6 +71,19 @@ test('asking for the page grants nothing', async () => {
   assert.equal((await fetch(`${base}/health`)).status, 200, 'health stays public');
 });
 
+// A tab from an older build asks for a bundle that is no longer there. Answering with the page
+// gives the script tag HTML, which fails silently and leaves the old build on screen.
+test('a file that is not there says so, while a client-side route still gets the page', async () => {
+  const gone = await fetch(`${base}/ui/assets/index-OLDBUILD.js`);
+  assert.equal(gone.status, 404);
+  assert.ok(!(gone.headers.get('content-type') ?? '').includes('text/html'), 'and not as the page');
+  for (const route of ['/ui/home/T-1', '/ui/setup/projects']) {
+    const res = await fetch(`${base}${route}`);
+    assert.equal(res.status, 200, route);
+    assert.match(res.headers.get('content-type') ?? '', /text\/html/, route);
+  }
+});
+
 test('a guessed cookie or a guessed code does not work', async () => {
   const guessed = `${uiCookieName(port)}=${uiSessionToken('not-the-secret')}`;
   assert.equal((await fetch(`${base}/api/tasks`, { headers: { Cookie: guessed } })).status, 401);

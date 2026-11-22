@@ -51,7 +51,7 @@ test('a failed check and an unmet point both go back to the Builder', () => {
   const backs = items.filter((i) => i.kind === 'sendback');
   assert.deepEqual(backs.map((b) => `${b.from}>${b.to}`), ['checks>builder', 'checker>builder', 'checks>builder']);
   assert.equal(backs[0]!.text, 'The tests did not pass. Back to you.');
-  assert.match(backs[1]!.text, /^1 of 2 points are not met yet, for example: point 2 in total\.js Back to you\.$/);
+  assert.match(backs[1]!.text, /^1 of 2 points is not met yet: point 2 in total\.js\. Back to you\.$/);
   assert.equal(backs[2]!.text, 'The tests took too long. Back to you.');
   assert.deepEqual(items.filter((i) => i.kind === 'handoff' && i.from === 'builder').map((i) => i.text), ['Done. Please check it.', 'Fixed. Please check again.', 'Fixed. Please check again.']);
 });
@@ -381,4 +381,62 @@ test('ask again: for a release, for a deploy, or not at all', () => {
   assert.equal(askAgainOf({ ...deployed, deploy: { state: 'running' } }), null);
   assert.equal(askAgainOf({ ...deployed, deploy: null }), null);
   assert.equal(askAgainOf({ ...deployed, approvals: [ticket('a2', 'deploy_stg', 'pending', 600)] }), null);
+});
+
+test('FryDay answers every note of yours: who read it, or what to do for it to count', () => {
+  const notes = [{ id: 1, body: 'use the red button', at: 150 }, { id: 2, body: 'did it work?', at: 900 }];
+  const reply = (change: Partial<StoryInput>) => buildStory(base({ notes, runStarts: [{ role: 'coder', at: 200 }], ...change }))
+    .filter((i) => i.id.startsWith('ack:')).map((i) => i.text);
+  // The first note was read by the Builder that started after it; the second by nobody yet.
+  assert.deepEqual(reply({}), ['Got it. I passed it on to the Builder.', 'Got it. The next teammate to start reads it.']);
+  const stopped = { ...base().task, state: 'needs_owner' };
+  assert.equal(reply({ task: stopped, choices: { tryAgain: true, accept: true, why: null } })[1], 'Got it. Press “Try again” below and the Builder starts on it.');
+  assert.match(reply({ task: stopped })[1]!, /^Saved on the task\. Nothing is running right now/);
+  const pending = [{ id: 'apr-1', action: 'release_stg', state: 'pending', payload: {}, requestedAt: 800, resolvedAt: null }];
+  assert.match(reply({ task: { ...base().task, state: 'awaiting_approval' }, approvals: pending })[1]!, /press Approve.*A message does not approve anything/);
+  const items = buildStory(base({ notes, runStarts: [] }));
+  assert.ok(items.findIndex((i) => i.id === 'ack:1') === items.findIndex((i) => i.id === 'note:1') + 1, 'the reply sits right under the note');
+});
+
+test('a task that ran out of rounds says so plainly, with the Checker\'s words and your two choices', () => {
+  const rounds = [round(1, 400, { met: [true, false] }), round(2, 500, { met: [true, false] }), round(3, 600, { met: [true, false] })];
+  const items = buildStory(base({
+    task: { ...base().task, state: 'needs_owner', note: 'Still not passing after 3 rounds — 1 unmet criterion' }, rounds,
+    choices: { tryAgain: true, accept: true, why: 'The code is right, but npm run lint cannot pass here' },
+  }));
+  assert.equal(items.at(-1)!.text,
+    'The team tried 3 times and it still does not pass. The Checker says: The code is right, but npm run lint cannot pass here. It is your call: try again (tell them what to do differently), or accept it as it is.');
+});
+
+test('no deploy is offered when Jenkins is not set up here, however the project is configured', () => {
+  const pushed = { state: 'needs_owner', approvals: [], lastRoundOutcome: 'passed', hasLiveWorkspace: true, hasStaging: true, hasDeployer: true, release: { state: 'pushed' }, deploy: null };
+  // The project names a Jenkins job, so the deploy step is not skipped, but Jenkins is not set up
+  // on this machine: pressing the button could only fail, so the task offers nothing to press.
+  assert.equal(askAgainOf({ ...pushed, jenkinsReady: false }), null);
+  assert.equal(askAgainOf({ ...pushed, jenkinsReady: true }), 'deploy');
+  // The same holds after a deploy that failed or was stopped.
+  for (const state of ['failed', 'stopped']) {
+    assert.equal(askAgainOf({ ...pushed, deploy: { state }, jenkinsReady: false }), null, state);
+    assert.equal(askAgainOf({ ...pushed, deploy: { state }, jenkinsReady: true }), 'deploy', state);
+  }
+});
+
+test('a round you accepted shows your decision and lets the release be asked for again', () => {
+  const accepted = { ...round(3, 600, { met: [true, false] }), outcome: 'accepted' as const };
+  const items = buildStory(base({ task: { ...base().task, state: 'awaiting_approval' }, rounds: [accepted] }));
+  assert.equal(items.find((i) => i.id === 'accepted:3')!.text, 'Accept it as it is.');
+  const facts = { state: 'needs_owner', approvals: [], hasLiveWorkspace: true, hasStaging: true, release: null, deploy: null };
+  assert.equal(askAgainOf({ ...facts, lastRoundOutcome: 'accepted' }), 'release');
+  assert.equal(askAgainOf({ ...facts, lastRoundOutcome: 'escalated' }), null);
+});
+
+test('a task whose work was discarded says it cannot go on, not that it needs you', () => {
+  const items = buildStory(base({ task: { ...base().task, state: 'needs_owner', note: 'Still not passing after 3 rounds' }, discarded: true }));
+  assert.equal(items.at(-1)!.text, 'The work on this task was discarded, so it cannot go on. To try again, start a new task.');
+});
+
+test('the Checker\'s words in the stop message end on a whole sentence', () => {
+  const why = 'The code looks correct, but criterion 10 is only half met. npm run build succeeds: the /user route built at 5.43 kB. npm run lint cannot pass because there is no ESLint config file in this repository, and next lint only opens a setup prompt that waits for an answer.';
+  const items = buildStory(base({ task: { ...base().task, state: 'needs_owner', note: 'x' }, rounds: [round(3, 600, { met: [false] })], choices: { tryAgain: true, accept: true, why } }));
+  assert.match(items.at(-1)!.text, /The Checker says: The code looks correct, but criterion 10 is only half met\. npm run build succeeds: the \/user route built at 5\.43 kB\. It is your call/);
 });

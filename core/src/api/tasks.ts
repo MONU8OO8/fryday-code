@@ -31,7 +31,7 @@ import { evidenceDir, isVerifying } from '../pipeline/verifyFlow.js';
 import { ApprovalError, latestApproval, publicApproval, requestReleaseApproval } from '../pipeline/approvals.js';
 import { ReleaseError, latestRelease, revertTaskRelease } from '../pipeline/releaseFlow.js';
 import { setTaskNote, getTask, createTask } from '../pipeline/taskState.js';
-import { ownerAnswered } from '../pipeline/pipeline.js';
+import { ownerAnswered, stoppedChoices, tryAgainAfterStop, acceptAsItIs, StoppedError } from '../pipeline/pipeline.js';
 import { getConfig } from '../config.js';
 import { AttachmentError, MAX_ATTACHMENT_BYTES, listAttachments, saveAttachment } from '../pipeline/attachments.js';
 import { QuestionError, answerQuestion, listQuestions, skipOpenQuestions } from '../pipeline/questions.js';
@@ -98,6 +98,37 @@ tasksRouter.post('/:id/approval', (req, res) => {
     res.status(201).json(publicApproval(requestReleaseApproval(req.params['id'])));
   } catch (err) {
     if (!(err instanceof ApprovalError)) throw err;
+    res.status(err.status).json({ error: err.message });
+  }
+});
+
+// ─── POST /api/tasks/:id/try-again · /api/tasks/:id/accept ────────────────────
+// A task that stopped at the round limit: one more round for the Builder (with an optional
+// note for the team), or the change taken as it is, on to the usual approval. Only the owner
+// at the UI may do either.
+tasksRouter.post('/:id/try-again', (req, res) => {
+  if (res.locals['authVia'] !== 'cookie') { res.status(403).json({ error: 'Trying again must be asked for in the FryDay UI' }); return; }
+  const id = req.params['id']!;
+  if (!getTask(id)) { res.status(404).json({ error: 'Task not found' }); return; }
+  if (!stoppedChoices(id).tryAgain) { res.status(409).json({ error: 'This task is not waiting for you to try again' }); return; }
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+  if (note) addMessage(id, 'owner', 'note', note);
+  void tryAgainAfterStop(id).catch((err) => {
+    console.error(`[fryday-core] trying ${id} again failed:`, err);
+    setTaskNote(id, `Could not start again: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  res.status(202).json({ ok: true });
+});
+
+tasksRouter.post('/:id/accept', (req, res) => {
+  if (res.locals['authVia'] !== 'cookie') { res.status(403).json({ error: 'Accepting a change must be done in the FryDay UI' }); return; }
+  const id = req.params['id']!;
+  if (!getTask(id)) { res.status(404).json({ error: 'Task not found' }); return; }
+  try {
+    acceptAsItIs(id);
+    res.json({ ok: true });
+  } catch (err) {
+    if (!(err instanceof StoppedError)) throw err;
     res.status(err.status).json({ error: err.message });
   }
 });

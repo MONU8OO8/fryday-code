@@ -17,7 +17,7 @@ import { getRepo } from '../registry/registry.js';
 import { sseEmit } from '../api/events.js';
 import { getTask, setTaskState, setTaskNote } from './taskState.js';
 import { activeWorkspace } from './workspaces.js';
-import { getRounds } from './rounds.js';
+import { getRounds, roundCleared } from './rounds.js';
 import { verifiedPhrase } from '../verify/report.js';
 import { git } from './worktrees.js';
 import { executeRelease, latestRelease } from './releaseFlow.js';
@@ -87,7 +87,7 @@ export function requestReleaseApproval(taskId: string): ApprovalRow {
     throw new ApprovalError(409, `${taskId} is ${task.state}; a release can only be requested once it has passed review`);
   }
   const rounds = getRounds(taskId);
-  if (rounds[rounds.length - 1]?.outcome !== 'passed') throw new ApprovalError(409, `${taskId} has not passed checks and review`);
+  if (!roundCleared(rounds[rounds.length - 1]?.outcome)) throw new ApprovalError(409, `${taskId} has not passed checks and review`);
   const repo = getRepo(ws.repo_id);
   if (!repo?.stgBranch) throw new ApprovalError(409, `${repo?.name ?? ws.repo_id} has no staging branch in the registry`);
   const release = latestRelease(taskId);

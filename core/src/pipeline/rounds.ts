@@ -6,7 +6,11 @@ import type { DiffFlag } from './diffFlags.js';
 import type { Verdict } from './review.js';
 import type { Verification } from '../verify/report.js';
 
-export type RoundOutcome = 'passed' | 'changes_requested' | 'escalated';
+/** accepted: the round was escalated, and the owner accepted the change as it is. */
+export type RoundOutcome = 'passed' | 'changes_requested' | 'escalated' | 'accepted';
+
+/** The round lets the task go on to the owner's approval: it passed, or the owner accepted it. */
+export const roundCleared = (outcome: string | null | undefined): boolean => outcome === 'passed' || outcome === 'accepted';
 
 export interface Round {
   taskId: string;

@@ -14,10 +14,12 @@ import { taskFlow, type TaskFlow } from './flow.js';
 import { groupOf, journeyOf, overviewLine, type Journey, type TaskGroup, type TaskOutcome } from './journey.js';
 import { listQuestions, NO_ANSWER } from './questions.js';
 import { parsePlan } from './review.js';
-import { getRounds } from './rounds.js';
+import { getRounds, roundCleared } from './rounds.js';
 import { getTask, taskMetadata, type TaskRow } from './taskState.js';
 import { listMessages } from './thread.js';
 import { getWorkspaces } from './workspaces.js';
+import { loadJenkinsCredentials } from '../deploy/config.js';
+import { stoppedChoices, type StoppedChoices } from './stopped.js';
 import type { QuestionOption } from './questions.js';
 import type { Round } from './rounds.js';
 import { ACTOR_NAME, actorOfRole, capital, checkName, clip, doingText, formatTokens, joinWords, plainText, times, type Actor } from './plainWords.js';
@@ -72,6 +74,12 @@ export interface StoryInput {
   deploy: { id: string; state: string; at: number } | null;
   /** How a task that is back with the owner ended (outcomeOf). */
   outcome: TaskOutcome;
+  /** When each agent run started, oldest first: who read a note of the owner's. */
+  runStarts?: Array<{ role: string; at: number }>;
+  /** What the owner can do with a task that stopped at the round limit (stoppedChoices). */
+  choices?: StoppedChoices;
+  /** The task had a workspace and every one was discarded: its work is gone, it cannot go on. */
+  discarded?: boolean;
 }
 
 /** The stored facts an ending is read from. Approvals in any order. */
@@ -144,6 +152,28 @@ function plainNote(note: string): string {
 }
 
 const said = (text: string, max = 280) => clip(plainText(text), max);
+/** Whole sentences from the start of text, as many as fit in max (at least the first, clipped). */
+function sentences(text: string, max: number): string {
+  let out = '';
+  for (const p of text.split(/(?<=[.!?])\s+/)) {
+    const next = out ? `${out} ${p}` : p;
+    if (out && next.length > max) break;
+    out = next;
+  }
+  return clip(out, max);
+}
+
+/** A sentence that ends with its own stop, so the next one can follow it. */
+const endSentence = (text: string) => (!text || /[.!?…]$/.test(text) ? text : `${text}.`);
+
+/** FryDay's reply to a note of the owner's that no agent has read yet: what happens with it now. */
+function ackWhileWaiting(state: string, pendingApproval: boolean, choices: StoppedChoices | undefined): string {
+  if (choices?.tryAgain) return 'Got it. Press “Try again” below and the Builder starts on it.';
+  if (pendingApproval) return 'Got it. To go on, press Approve (or Not yet) on the card above. A message does not approve anything.';
+  if (state === 'waiting_owner') return 'Got it. The team is waiting for your answer to the question above.';
+  if (state === 'needs_owner' || state === 'deployed' || state === 'failed') return 'Saved on the task. Nothing is running right now, so nobody reads it until the task goes on.';
+  return 'Got it. The next teammate to start reads it.';
+}
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
@@ -241,8 +271,11 @@ export function buildStory(input: StoryInput): StoryItem[] {
       if (r.verdict.verdict === 'pass' && unmet.length === 0) {
         add({ id: `verdict:${r.round}`, at: at + 2, from: 'checker', kind: 'said', round: r.round, text: `It meets all ${r.verdict.criteria.length} points of the plan.`, details });
       } else {
-        const text = unmet.length > 0
-          ? `${unmet.length} of ${r.verdict.criteria.length} points are not met yet, for example: ${said(unmet[0]!.criterion, 160)} Back to you.`
+        const first = endSentence(said(unmet[0]?.criterion ?? '', 160));
+        const text = unmet.length === 1
+          ? `1 of ${r.verdict.criteria.length} points is not met yet: ${first} Back to you.`
+          : unmet.length > 1
+          ? `${unmet.length} of ${r.verdict.criteria.length} points are not met yet, for example: ${first} Back to you.`
           : `${said(r.verdict.summary, 200)} Back to you.`;
         add({ id: `verdict:${r.round}`, at: at + 2, from: 'checker', to: 'builder', kind: 'sendback', round: r.round, text, details });
         continue;
@@ -271,6 +304,16 @@ export function buildStory(input: StoryInput): StoryItem[] {
         });
       }
     }
+  }
+
+  for (const r of input.rounds.filter((x) => x.outcome === 'accepted')) {
+    add({ id: `accepted:${r.round}`, at: r.createdAt + 4, from: 'you', kind: 'note', round: r.round, text: 'Accept it as it is.' });
+  }
+
+  const pendingNow = input.approvals.some((a) => a.state === 'pending');
+  for (const n of input.notes) {
+    const reader = input.runStarts?.find((r) => r.at > n.at);
+    add({ id: `ack:${n.id}`, at: n.at, from: 'fryday', to: 'you', kind: 'said', text: reader ? `Got it. I passed it on to the ${ACTOR_NAME[actorOfRole(reader.role)]}.` : ackWhileWaiting(t.state, pendingNow, input.choices) });
   }
 
   let pending = false;
@@ -324,6 +367,15 @@ export function buildStory(input: StoryInput): StoryItem[] {
         : deploy ? 'You said not yet. The change is on staging, but the staging server was not updated.'
         : 'You said not yet. Nothing was changed on staging.';
       add({ id, at: last + 1, from: 'fryday', to: 'you', kind: 'said', text });
+    } else if (input.discarded) {
+      add({ id, at: last + 1, from: 'fryday', to: 'you', kind: 'said', text: 'The work on this task was discarded, so it cannot go on. To try again, start a new task.' });
+    } else if (input.choices?.tryAgain) {
+      const tries = input.rounds.length;
+      const why = input.choices.why ? ` The Checker says: ${endSentence(sentences(plainText(input.choices.why), 260))}` : '';
+      add({
+        id, at: last + 1, from: 'fryday', to: 'you', kind: 'said', details: whatHappened,
+        text: `The team tried ${times(tries)} and it still does not pass.${why} It is your call: try again (tell them what to do differently), or accept it as it is.`,
+      });
     } else {
       add({ id, at: last + 1, from: 'fryday', to: 'you', kind: 'said', text: t.note ? `I stopped and need you: ${said(plainNote(t.note), 300)}` : 'I stopped and need you.', details: t.note ? whatHappened : null });
     }
@@ -344,6 +396,10 @@ export interface TaskStory {
   now: StoryNow | null;
   /** What the owner may ask for again (askAgainOf): POST /api/tasks/:id/approval or /deploy. */
   askAgain: AskAgain;
+  /** A task that stopped at the round limit: POST /api/tasks/:id/try-again or /accept. */
+  choices: StoppedChoices;
+  /** Its work was discarded: nothing more can happen on it. */
+  discarded: boolean;
 }
 
 export type AskAgain = 'release' | 'deploy' | null;
@@ -359,6 +415,8 @@ export interface AskAgainFacts {
   hasStaging: boolean;
   /** The project has a Jenkins deployer (the flow's deploy step is not skipped). */
   hasDeployer?: boolean;
+  /** Jenkins itself is set up on this machine. Without it a deploy cannot be started at all. */
+  jenkinsReady?: boolean;
   release: { state: string } | null;
   deploy: { state: string } | null;
 }
@@ -369,11 +427,15 @@ export interface AskAgainFacts {
  */
 export function askAgainOf(f: AskAgainFacts): AskAgain {
   if (f.approvals.some((a) => a.state === 'pending')) return null;
-  if (f.release?.state === 'pushed' && (f.deploy?.state === 'failed' || f.deploy?.state === 'stopped')) return 'deploy';
+  // Asking again starts a Jenkins job, so without Jenkins set up here there is nothing to offer:
+  // the task already says so in the chat, with what to do instead.
+  // A deploy that ran is proof enough of a deployer; a task that never got one needs hasDeployer.
+  const jenkins = f.jenkinsReady !== false;
+  if (f.release?.state === 'pushed' && jenkins && (f.deploy?.state === 'failed' || f.deploy?.state === 'stopped')) return 'deploy';
   // A declined deploy leaves no deploy row; the full task page offers "Deploy with Jenkins" then (POST /deploy).
-  if (f.release?.state === 'pushed' && !f.deploy && f.state === 'needs_owner' && f.hasDeployer) return 'deploy';
+  if (f.release?.state === 'pushed' && !f.deploy && f.state === 'needs_owner' && f.hasDeployer && jenkins) return 'deploy';
   const releasable = !f.release || f.release.state === 'stopped' || f.release.state === 'reverted';
-  if (f.lastRoundOutcome === 'passed' && f.hasLiveWorkspace && f.hasStaging && releasable && (f.state === 'awaiting_approval' || f.state === 'needs_owner')) return 'release';
+  if (roundCleared(f.lastRoundOutcome) && f.hasLiveWorkspace && f.hasStaging && releasable && (f.state === 'awaiting_approval' || f.state === 'needs_owner')) return 'release';
   return null;
 }
 
@@ -435,6 +497,9 @@ export function taskStory(taskId: string): TaskStory | null {
     lastRunAt: runs.at(-1)?.started_at ?? null,
   });
   const rounds = getRounds(taskId);
+  const choices = stoppedChoices(taskId);
+  const workspaces = getWorkspaces(taskId);
+  const discarded = workspaces.length > 0 && workspaces.every((w) => w.removed_at !== null);
 
   const items = buildStory({
     task: { id: task.id, title: task.title, description: task.description, state: task.state, createdAt: task.created_at, note: typeof note === 'string' ? note : null },
@@ -449,6 +514,9 @@ export function taskStory(taskId: string): TaskStory | null {
     release: release ? { id: release.id, state: release.state, at: release.started_at } : null,
     deploy: deploy ? { id: deploy.id, state: deploy.state, at: deploy.started_at } : null,
     outcome,
+    runStarts: runs.map((r) => ({ role: r.role, at: r.started_at })),
+    choices,
+    discarded,
   });
 
   const live = runs.filter((r) => r.state === 'running').at(-1);
@@ -460,10 +528,13 @@ export function taskStory(taskId: string): TaskStory | null {
     journey: journeyOf(flow, task.state, outcome),
     items,
     now,
+    choices,
+    discarded,
     askAgain: askAgainOf({
       state: task.state, approvals, hasStaging: has.hasStaging, hasDeployer: has.hasDeployer,
+      jenkinsReady: loadJenkinsCredentials() !== null,
       lastRoundOutcome: rounds.at(-1)?.outcome ?? null,
-      hasLiveWorkspace: getWorkspaces(taskId).some((w) => w.removed_at === null),
+      hasLiveWorkspace: workspaces.some((w) => w.removed_at === null),
       release: release ?? null,
       deploy: deploy ?? null,
     }),

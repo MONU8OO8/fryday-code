@@ -195,8 +195,13 @@ if (fs.existsSync(uiDir)) {
   app.get('/ui', sendUi);
   app.get('/ui/', sendUi);
   app.use('/ui', express.static(uiDir, { index: false }));
-  // SPA fallback for client-side routes such as /ui/tasks/T-1
-  app.get('/ui/*splat', sendUi);
+  // SPA fallback for client-side routes such as /ui/tasks/T-1. A request for a file that is not
+  // there (a browser asking for the bundle of an older build) must say so rather than answer with
+  // the page: a script tag served HTML fails silently, and the tab keeps showing the old build.
+  app.get('/ui/*splat', (req: Request, res: Response): void => {
+    if (/\.[a-z0-9]+$/i.test(req.path)) { res.status(404).type('text/plain').send('Not found'); return; }
+    sendUi(req, res);
+  });
 }
 
 // Root redirect to UI

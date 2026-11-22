@@ -220,6 +220,8 @@ export interface ReviewBrief {
   patch: string;
   /** What testers observed on the running service in earlier rounds, as the coder was told. */
   earlier?: Array<{ round: number; feedback: string }>;
+  /** What the owner wrote on the task (fromTheOwner), already a Markdown section; empty when nothing. */
+  ownerNotes?: string;
 }
 
 const EARLIER_CHARS = 5000;
@@ -247,6 +249,10 @@ export function writeReviewBrief(checkoutPath: string, brief: ReviewBrief): void
     `## Task\n\n**${brief.title}**\n\n${brief.description}`,
     brief.plan ? `## Planned approach\n\n${brief.plan.summary}\n\n${brief.plan.approach}` : '',
     `## Acceptance criteria\n\n${criteria}`,
+    // The owner's word decides how a criterion is judged: they may waive one, or say what counts.
+    brief.ownerNotes
+      ? `## What the owner said\n\nThe owner wrote this on the task. Where it waives a criterion or says how to judge one, follow it, and say so in that criterion's evidence. It does not change what the checks above found.\n\n${demoteHeadings(brief.ownerNotes)}`
+      : '',
     `## Checks Fryday already ran on this change\n\n${checks}\n\nDependencies in this checkout: ${brief.depsNote}`,
     `## Flagged in the diff\n\n${flags}`,
     brief.earlier?.length

@@ -43,7 +43,7 @@ const TRANSITIONS: Record<TaskState, TaskState[]> = {
   deploying:         ['deployed', 'awaiting_approval', 'needs_owner', 'failed'], // awaiting_approval: the pipeline asks a question only the owner may answer
   deployed:          [],
   failed:            [],
-  needs_owner:       ['intake', 'planning', 'coding', 'testing', 'verifying', 'releasing', 'deploying', 'failed'], // the owner can let it go on
+  needs_owner:       ['intake', 'planning', 'coding', 'testing', 'verifying', 'awaiting_approval', 'releasing', 'deploying', 'failed'], // the owner can let it go on; awaiting_approval: accepted as it is
 };
 
 export function canTransition(from: TaskState, to: TaskState): boolean {

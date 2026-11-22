@@ -49,6 +49,7 @@ import { BRIEF_SCHEMA, TRIAGE_SCHEMA, TASK_FOLDER, parseBrief, parseTriage, brie
 import { branchFacts, existsOnRemote, fetchBranches, listCandidates } from './branches.js';
 import { askQuestions, listQuestions, openQuestions } from './questions.js';
 import { addMessage, ownerNotes } from './thread.js';
+import { StoppedError, stoppedChoices } from './stopped.js';
 import { documentsText } from './attachments.js';
 import { retryWhenBusy, cancelPendingRetry, type RetryStage } from './retry.js';
 import { verifyRound, onTesterRunExit, runProfileOf, isTesterRole, stopVerification, type VerifyHost } from './verifyFlow.js';
@@ -749,7 +750,7 @@ export async function reviewRound(taskId: string, round: number): Promise<void> 
 
   writeReviewBrief(checkout, {
     taskId, title: task.title, description: task.description, round, plan: planOf(task), checks, flags,
-    depsNote: deps.detail, patch: diffPatch(ws.worktree_path, ws.base_sha),
+    depsNote: deps.detail, patch: diffPatch(ws.worktree_path, ws.base_sha), ownerNotes: fromTheOwner(taskId),
     // What testers observed on the running service is a fact the coder acted on; the reviewer of a
     // later round gets it too, so both judge from the same facts. Earlier check results are not
     // passed on: the checks above are run again on this commit and are the only ones that count.
@@ -864,6 +865,29 @@ function sendBack(taskId: string, round: number, feedback: string, summary: stri
   saveOutcome(taskId, round, 'changes_requested', feedback);
   sseEmit({ type: 'round_updated', taskId, round });
   background(taskId, 'Starting the next coder round', () => startCoder(taskId, round + 1, feedback));
+}
+
+// ─── The owner decides on a task that ran out of rounds ───────────────────────
+
+export { StoppedError, stoppedChoices, type StoppedChoices } from './stopped.js';
+
+/** One more Builder round on a stopped task. The Builder and Checker read what the owner wrote. */
+export async function tryAgainAfterStop(taskId: string): Promise<void> {
+  if (!stoppedChoices(taskId).tryAgain) throw new StoppedError(409, `${taskId} is not waiting for you to try again`);
+  const last = getRounds(taskId).at(-1)!;
+  addMessage(taskId, 'fryday', 'event', 'You asked the team to try again.');
+  await startCoder(taskId, last.round + 1, last.feedback);
+}
+
+/** The owner takes the change as it is: the task goes on to the approval a passed round gets. */
+export function acceptAsItIs(taskId: string): void {
+  if (!stoppedChoices(taskId).accept) throw new StoppedError(409, `${taskId} cannot be accepted as it is`);
+  const last = getRounds(taskId).at(-1)!;
+  saveOutcome(taskId, last.round, 'accepted', last.feedback);
+  const accepted = 'You accepted the change as it is, with the Checker\'s open points.';
+  setTaskState(taskId, 'awaiting_approval', accepted);
+  setTaskNote(taskId, `${accepted} ${requestNextApproval(taskId)}`);
+  sseEmit({ type: 'round_updated', taskId, round: last.round });
 }
 
 // ─── Verification (the running service) ───────────────────────────────────────
