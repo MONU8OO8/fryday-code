@@ -5,7 +5,8 @@
 
 import { useState } from 'react';
 import clsx from 'clsx';
-import { Field } from '../ui';
+import { Button, Field } from '../ui';
+import { useCoreApi } from '../hooks/useSse';
 
 export interface Deployer {
   job: string;
@@ -42,6 +43,26 @@ export default function DeployerFields({ kind, value, hasStaging, onChange }: {
   const set = (change: Partial<Deployer>) => onChange('jenkins', { ...d, ...change });
   const [paramsText, setParamsText] = useState(() => toText(d.params));
   const code = 'font-mono text-xs';
+  // The job name is the one thing here FryDay cannot work out for itself, and a wrong one is
+  // only found at the deploy. Ask Jenkins now; nothing is started by the asking.
+  const api = useCoreApi();
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<{ ok: boolean; text: string } | null>(null);
+  const check = () => {
+    setChecking(true); setChecked(null);
+    void api.post('/deploy/jenkins/job', { job: d.job.trim(), branchParam: d.branchParam ?? 'BRANCH' })
+      .then((r: { ok: boolean; problem: string | null; didYouMean: string[] }) => {
+        setChecked(r.ok
+          ? { ok: true, text: `${d.job.trim()} is there and takes ${d.branchParam ?? 'no branch parameter'}.` }
+          : { ok: false, text: r.didYouMean?.length ? `${r.problem} These are there: ${r.didYouMean.join(', ')}.` : r.problem ?? 'Jenkins could not be asked.' });
+      })
+      .catch((e: unknown) => {
+        let text = String(e instanceof Error ? e.message : e);
+        try { text = (JSON.parse(text) as { error?: string }).error ?? text; } catch { /* not JSON */ }
+        setChecked({ ok: false, text });
+      })
+      .finally(() => setChecking(false));
+  };
 
   return (
     <fieldset className="rounded-xl border border-hud-border p-4 space-y-3">
@@ -67,6 +88,12 @@ export default function DeployerFields({ kind, value, hasStaging, onChange }: {
           </div>
           <Field as="textarea" label="Other parameters (NAME=value, one per line)" className={`${code} h-16`} value={paramsText} placeholder="ENV=stg"
             onChange={(e) => { setParamsText(e.target.value); set({ params: fromText(e.target.value) }); }} hint="Stored and shown as they are: not for secrets." />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" size="sm" disabled={checking || !d.job.trim()} onClick={check}>
+              {checking ? 'Asking Jenkins…' : 'Check this job (read only)'}
+            </Button>
+            {checked && <span role="status" className={clsx('text-xs', checked.ok ? 'text-hud-green' : 'text-hud-red')}>{checked.text}</span>}
+          </div>
         </>
       )}
     </fieldset>

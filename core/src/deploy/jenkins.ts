@@ -104,6 +104,13 @@ export function normaliseBase(raw: string): URL {
 export class JenkinsClient {
   private readonly base: URL;
   private crumb: { field: string; value: string } | null | undefined;
+  /**
+   * The session Jenkins started when it gave out the crumb. A crumb belongs to the session it
+   * was issued to, so a POST that carries the crumb without the session is refused with 403.
+   * (Signing in with a real API token is exempt from this; a password is not, which is why it
+   * only bites some installs.) Cookies from Jenkins are kept here and sent back to it only.
+   */
+  private cookies = new Map<string, string>();
 
   constructor(private readonly creds: JenkinsCredentials, private readonly transport: Transport = (url, init) => fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(30_000) })) {
     this.base = normaliseBase(creds.baseUrl);
@@ -132,6 +139,20 @@ export class JenkinsClient {
     return `Basic ${Buffer.from(`${this.creds.user}:${this.creds.token}`).toString('base64')}`;
   }
 
+  /** Remember the cookies Jenkins set, so the crumb's session is still ours on the next call. */
+  private keepCookies(res: { headers: { get(name: string): string | null; getSetCookie?: () => string[] } }): void {
+    const all = res.headers.getSetCookie ? res.headers.getSetCookie() : [res.headers.get('set-cookie') ?? ''];
+    for (const line of all) {
+      const pair = line.split(';')[0]?.trim();
+      const at = pair ? pair.indexOf('=') : -1;
+      if (pair && at > 0) this.cookies.set(pair.slice(0, at), pair.slice(at + 1));
+    }
+  }
+
+  private cookieHeader(): string | null {
+    return this.cookies.size === 0 ? null : [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; ');
+  }
+
   private async request(method: 'GET' | 'POST', pathOrUrl: string, body?: string, contentType?: string) {
     const headers: Record<string, string> = { Authorization: this.auth(), Accept: 'application/json' };
     if (contentType) headers['Content-Type'] = contentType;
@@ -139,9 +160,12 @@ export class JenkinsClient {
       const crumb = await this.getCrumb();
       if (crumb) headers[crumb.field] = crumb.value;
     }
+    const cookie = this.cookieHeader();
+    if (cookie) headers['Cookie'] = cookie;
     let res;
     try {
       res = await this.transport(this.urlFor(pathOrUrl), { method, headers, body });
+      this.keepCookies(res);
     } catch (err) {
       throw new JenkinsError(`Jenkins could not be reached: ${err instanceof Error ? (err.cause instanceof Error ? err.cause.message : err.message) : String(err)}`);
     }
@@ -166,6 +190,8 @@ export class JenkinsClient {
     if (this.crumb !== undefined) return this.crumb;
     try {
       const res = await this.transport(this.urlFor('/crumbIssuer/api/json'), { method: 'GET', headers: { Authorization: this.auth(), Accept: 'application/json' } });
+      // The session this crumb belongs to: without it the crumb is refused on the POST.
+      this.keepCookies(res);
       if (res.status !== 200) { this.crumb = null; return null; }
       const c = JSON.parse(await res.text()) as { crumbRequestField?: unknown; crumb?: unknown };
       this.crumb = typeof c.crumbRequestField === 'string' && typeof c.crumb === 'string' ? { field: c.crumbRequestField, value: c.crumb } : null;
@@ -193,6 +219,23 @@ export class JenkinsClient {
       buildable: raw.buildable !== false,
       parameters: defs.map((d) => ({ name: d.name, type: d.type, defaultValue: d.defaultParameterValue?.value === undefined ? null : String(d.defaultParameterValue.value) })),
     };
+  }
+
+  /**
+   * The names of the jobs beside this one, for a job name that is not there. One request to the
+   * folder holding it, so a typed name can be answered with the names that do exist.
+   */
+  async siblingJobs(job: string): Promise<string[]> {
+    const parts = job.trim().split('/');
+    const folder = parts.slice(0, -1);
+    const path = folder.length > 0 ? jobPath(folder.join('/')) : '';
+    try {
+      const raw = await this.json<{ jobs?: Array<{ name?: unknown }> }>(`${path}/api/json?tree=jobs[name]`);
+      const prefix = folder.length > 0 ? `${folder.join('/')}/` : '';
+      return (raw.jobs ?? []).map((j) => `${prefix}${String(j.name ?? '')}`).filter((n) => !n.endsWith('/'));
+    } catch {
+      return []; // the folder is not readable either: the plain "not there" stands on its own
+    }
   }
 
   /** Start a build. Returns the queue item's path, which becomes a build once Jenkins starts it. */

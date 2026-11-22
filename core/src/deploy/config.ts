@@ -11,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
 import { getConfig } from '../config.js';
-import { JenkinsError, jobPath, normaliseBase, type JenkinsCredentials } from './jenkins.js';
+import { JenkinsClient, JenkinsError, jobPath, normaliseBase, type JenkinsCredentials } from './jenkins.js';
 
 // ─── The Jenkins ──────────────────────────────────────────────────────────────
 
@@ -41,7 +41,8 @@ export function jenkinsStatus(): JenkinsStatus {
   return { configured: c !== null, baseUrl: c?.baseUrl ?? null, user: c?.user ?? null };
 }
 
-export function saveJenkinsCredentials(input: { baseUrl?: unknown; user?: unknown; token?: unknown }): JenkinsStatus {
+/** The three fields, checked for shape only. Throws DeployConfigError on anything unusable. */
+export function readCredentials(input: { baseUrl?: unknown; user?: unknown; token?: unknown }): JenkinsCredentials {
   const user = typeof input.user === 'string' ? input.user.trim() : '';
   const token = typeof input.token === 'string' ? input.token.trim() : '';
   if (!user || user.length > 200 || /[\s:]/.test(user)) throw new DeployConfigError('The Jenkins user name is required and has no spaces or colons');
@@ -52,6 +53,12 @@ export function saveJenkinsCredentials(input: { baseUrl?: unknown; user?: unknow
   } catch (err) {
     throw new DeployConfigError(err instanceof JenkinsError ? err.message : String(err));
   }
+  return { baseUrl: base.href.replace(/\/$/, ''), user, token };
+}
+
+export function saveJenkinsCredentials(input: { baseUrl?: unknown; user?: unknown; token?: unknown }): JenkinsStatus {
+  const { baseUrl, user, token } = readCredentials(input);
+  const base = new URL(baseUrl);
   fs.mkdirSync(path.dirname(credsFile()), { recursive: true, mode: 0o700 });
   const tmp = `${credsFile()}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ baseUrl: base.href.replace(/\/$/, ''), user, token }), { mode: 0o600 });
@@ -135,4 +142,73 @@ export function inputKind(stageName: string | null, message: string, proceedText
   if (PRODUCTION.test(text)) return 'production';
   if (STAGING.test(text)) return 'staging';
   return 'unclear';
+}
+
+// ─── Checking a setup before it is kept ───────────────────────────────────────
+
+/**
+ * What a check of the Jenkins setup found, in words the owner can act on. Deploys are the one
+ * thing FryDay cannot try out for itself later, so both the credentials and the job a project
+ * names are checked when they are given, not left to fail at the deploy.
+ */
+export interface JenkinsCheck {
+  ok: boolean;
+  /** Who Jenkins says we are, when the credentials work. */
+  user: string | null;
+  /** The problem, in one sentence, when ok is false. */
+  problem: string | null;
+  /** Job names that do exist, when the one given is not there. */
+  didYouMean: string[];
+  /** The credentials are fine but Jenkins could not be reached to be sure. */
+  unreachable: boolean;
+}
+
+const nearest = (want: string, names: string[]): string[] => {
+  const tail = (n: string) => n.split('/').pop() ?? n;
+  const w = tail(want).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const score = (n: string) => {
+    const t = tail(n).toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!t || !w) return 0;
+    if (t === w) return 100;
+    if (w.includes(t) || t.includes(w)) return 50 + Math.min(t.length, w.length);
+    const shared = [...new Set(t)].filter((c) => w.includes(c)).length;
+    return shared;
+  };
+  return names.filter((n) => score(n) > 3).sort((a, b) => score(b) - score(a)).slice(0, 5);
+};
+
+/**
+ * Ask Jenkins whether these credentials work, and whether the job is there with the branch
+ * parameter it is meant to take. Read-only: nothing is started.
+ */
+export async function checkJenkins(
+  creds: JenkinsCredentials,
+  job?: { name: string; branchParam: string },
+  client = new JenkinsClient(creds),
+): Promise<JenkinsCheck> {
+  const base = { ok: false, user: null as string | null, problem: null as string | null, didYouMean: [] as string[], unreachable: false };
+  let user: string;
+  try {
+    user = await client.whoAmI();
+  } catch (err) {
+    if (!(err instanceof JenkinsError)) throw err;
+    // Refused is an answer: the credentials are wrong. Not reached is not an answer about them.
+    const refused = err.status === 401 || err.status === 403;
+    return { ...base, problem: err.message, unreachable: !refused };
+  }
+  if (!job) return { ...base, ok: true, user };
+  try {
+    const info = await client.jobInfo(job.name);
+    const names = info.parameters.map((p) => p.name);
+    if (!info.buildable) return { ...base, user, problem: `The job ${info.fullName} is there but is disabled in Jenkins, so it cannot be started.` };
+    if (!names.includes(job.branchParam)) {
+      const has = names.length ? `it takes ${names.join(', ')}` : 'it takes no parameters';
+      return { ...base, user, problem: `The job ${info.fullName} has no "${job.branchParam}" parameter (${has}), so FryDay cannot tell it which branch to deploy.` };
+    }
+    return { ...base, ok: true, user };
+  } catch (err) {
+    if (!(err instanceof JenkinsError)) throw err;
+    if (err.status !== 404) return { ...base, user, problem: err.message, unreachable: err.status === null };
+    return { ...base, user, problem: `There is no job named ${job.name} on this Jenkins.`, didYouMean: nearest(job.name, await client.siblingJobs(job.name)) };
+  }
 }

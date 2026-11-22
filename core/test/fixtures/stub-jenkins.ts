@@ -62,6 +62,12 @@ export class StubJenkins {
   readonly user = 'fryday-test';
   readonly token = 'stub-token-not-a-real-credential';
   readonly crumb = 'stub-crumb-value';
+  readonly sessionCookie = 'JSESSIONID.stub=stub-session-value';
+  /**
+   * Like a real Jenkins signed in with a password: the crumb belongs to the session it was
+   * issued to, so a POST carrying the crumb without that session cookie is refused.
+   */
+  requireSessionWithCrumb = false;
   /** Set to make every answer a redirect to another host, to prove it is not followed. */
   redirectEverythingTo: string | null = null;
   /** The Location the trigger answers with; default a proper queue item on this server. */
@@ -142,8 +148,16 @@ export class StubJenkins {
     }
     const expected = `Basic ${Buffer.from(`${this.user}:${this.token}`).toString('base64')}`;
     if (req.headers.authorization !== expected) { this.json(res, 401, { error: 'unauthorized' }); return; }
-    if (path === '/crumbIssuer/api/json') { this.json(res, 200, { crumbRequestField: 'Jenkins-Crumb', crumb: this.crumb }); return; }
+    if (path === '/crumbIssuer/api/json') {
+      res.setHeader('set-cookie', `${this.sessionCookie}; Path=/; HttpOnly`);
+      this.json(res, 200, { crumbRequestField: 'Jenkins-Crumb', crumb: this.crumb });
+      return;
+    }
     if (req.method === 'POST' && req.headers['jenkins-crumb'] !== this.crumb) { this.json(res, 403, { error: 'No valid crumb' }); return; }
+    if (req.method === 'POST' && this.requireSessionWithCrumb && !(req.headers.cookie ?? '').includes(this.sessionCookie)) {
+      this.json(res, 403, { error: 'No valid crumb (the crumb is not for this session)' });
+      return;
+    }
     if (path === '/me/api/json') { this.json(res, 200, { id: this.user, fullName: 'FryDay Test' }); return; }
 
     const q = path.match(/^\/queue\/item\/(\d+)\/api\/json$/);
@@ -162,6 +176,14 @@ export class StubJenkins {
       return;
     }
 
+    // A folder lists the jobs inside it, as Jenkins does: that is how a name that is not there
+    // can be answered with the names that are.
+    const folder = path.match(/^((?:\/job\/[^/]+)+)\/api\/json$/);
+    if (folder && !this.jobFromPath(path)) {
+      const prefix = folder[1]!.split('/job/').filter(Boolean).map(decodeURIComponent).join('/');
+      const inside = [...this.jobs.keys()].filter((n) => n.startsWith(`${prefix}/`)).map((n) => n.slice(prefix.length + 1).split('/')[0]);
+      if (inside.length > 0) { this.json(res, 200, { jobs: [...new Set(inside)].map((name) => ({ name })) }); return; }
+    }
     const found = this.jobFromPath(path);
     if (!found) { this.json(res, 404, { error: 'no such job' }); return; }
     const { job, rest } = found;
