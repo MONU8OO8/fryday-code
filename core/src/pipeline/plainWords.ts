@@ -25,7 +25,7 @@ export function clip(text: string, max = 280): string {
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 }
 
-const LINK_WORDS = 'the link on the Technical details page';
+const LINK_WORDS = 'the link on the Who did what page';
 
 /** Sentence punctuation after a URL stays outside it; a closing ")" stays only if the URL opens one. */
 function urlCore(url: string): string {

@@ -87,7 +87,7 @@ export default function TaskView({ id }: { id: string }) {
         subtitle={<>{task.projectName ?? 'Project not chosen yet'} · started {ago(task.createdAt)} · {fmtTokens(task.budget.usedTokens)} of {fmtTokens(task.budget.limitTokens)} tokens</>}
         actions={<>
           {story.canStop && <Button variant="danger" size="sm" disabled={busy} onClick={stop}>Stop</Button>}
-          <Link to={`/home/${id}/details`} className={buttonClass('ghost', 'sm')}>Technical details</Link>
+          <Link to={`/home/${id}/details`} className={buttonClass('ghost', 'sm')}>Who did what</Link>
         </>} />
       <TeamStrip story={story} />
       <JourneyLine key={id} journey={journey} />

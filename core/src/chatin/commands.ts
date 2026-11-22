@@ -12,7 +12,9 @@
  *   decline 123456             decline it, with its code
  *   go ahead                   go on without answering the open questions
  *   2: <answer>                answer question 2 (a plain message answers the only open question)
- *   note: <text>               tell the agents something (so does any other message)
+ *   start                      start the task FryDay proposed in another project
+ *   stop                       stop the task: agents stop, open decisions are withdrawn
+ *   <anything else>            FryDay reads it and answers; asked for a change, it sends the work back
  *   status · help
  */
 
@@ -24,6 +26,8 @@ export type Command =
   | { kind: 'decline'; code: string }
   | { kind: 'missing_code'; decision: 'approve' | 'decline' }
   | { kind: 'go_ahead' }
+  | { kind: 'start_proposal' }
+  | { kind: 'stop' }
   | { kind: 'answer'; index: number | null; text: string }
   | { kind: 'note'; text: string }
   | { kind: 'unknown' };
@@ -69,6 +73,8 @@ export function parseCommand(raw: string, inTaskThread: boolean): Command {
     return approve ? { kind: 'approve', code } : { kind: 'decline', code };
   }
   if (/^(go ahead|go on|skip( the)? questions?|proceed without answers?)[.!]?$/i.test(text)) return { kind: 'go_ahead' };
+  if (/^start( it| that| this)?( task)?[.!]?$/i.test(text)) return { kind: 'start_proposal' };
+  if (/^stop( it| this| the task)?[.!]?$/i.test(text)) return { kind: 'stop' };
   const numbered = text.match(/^(?:answer\s*)?(\d{1,2})\s*[:.)]\s*([\s\S]+)$/i);
   if (numbered) return { kind: 'answer', index: Number(numbered[1]), text: numbered[2]!.trim() };
   const answer = text.match(/^answer\s*:\s*([\s\S]+)$/i);
@@ -87,5 +93,7 @@ export const HELP_TEXT = [
   '• `approve 123456` / `decline 123456` — the decision that is waiting, with the code from its message.',
   '• `go ahead` — go on without answering the open questions.',
   '• `2: <answer>` — answer question 2; a plain message answers the only open question.',
-  '• `note: <text>` — tell the agents something; any other message does too.',
+  '• `start` — start the task FryDay proposed in another project.',
+  '• `stop` — stop the task. Nothing already done is undone.',
+  '• Anything else — FryDay reads it and answers here. Ask for a change and it sends the work back to the Builder.',
 ].join('\n');

@@ -90,6 +90,23 @@ export function parseProposal(body: string): Proposal | null {
   }
 }
 
+// ─── Saying it ────────────────────────────────────────────────────────────────
+
+/** What the Lead said on a task: its answer, or a task it proposed in another project. */
+export type LeadSaid = { taskId: string; kind: 'reply'; text: string } | { taskId: string; kind: 'proposal'; projectName: string; title: string };
+const listeners: Array<(said: LeadSaid) => void> = [];
+/** Hear what the Lead says, to pass it on outside the app (the Chat space). */
+export function onLeadSaid(listener: (said: LeadSaid) => void): void {
+  listeners.push(listener);
+}
+const tell = (said: LeadSaid) => { for (const l of listeners) { try { l(said); } catch (err) { console.error('[fryday-core] a Lead listener failed:', err); } } };
+
+/** The Lead's words on the task's thread, and to whoever listens. */
+function say(taskId: string, text: string): void {
+  addMessage(taskId, 'fryday', 'reply', text);
+  tell({ taskId, kind: 'reply', text });
+}
+
 // ─── What the Lead has and has not answered ───────────────────────────────────
 
 /** The id of the last owner note someone has dealt with (the Lead, or a button that used it). */
@@ -191,7 +208,7 @@ export function askLead(taskId: string): boolean {
     startRun({ taskId, role: 'fryday', prompt: leadRecord(taskId, asked), appendSystemPrompt: LEAD_PROMPT, jsonSchema: LEAD_SCHEMA, cwd: getConfig().conciergeDir });
   } catch (err) {
     console.error(`[fryday-core] the Lead could not start for ${taskId}:`, err);
-    addMessage(taskId, 'fryday', 'reply', 'I could not read this just now: every agent slot is busy. Your message is saved on the task; write again in a moment.');
+    say(taskId, 'I could not read this just now: every agent slot is busy. Your message is saved on the task; write again in a moment.');
     return false;
   }
   sseEmit({ type: 'task_updated', taskId });
@@ -205,7 +222,7 @@ function onLeadExit(exit: RunExit): void {
   const run = getDb().prepare('SELECT output_json FROM runs WHERE id = ?').get(exit.runId) as { output_json: string | null } | undefined;
   const answer = exit.state === 'completed' ? parseLead(run?.output_json ?? null) : null;
   if (!answer) {
-    addMessage(taskId, 'fryday', 'reply', exit.state === 'killed'
+    say(taskId, exit.state === 'killed'
       ? 'I stopped before answering. Your message is saved on the task.'
       : 'I could not answer just now (the AI service did not give me an answer). Your message is saved on the task; write again and I will read it.');
   } else {
@@ -218,28 +235,29 @@ function onLeadExit(exit: RunExit): void {
 function act(taskId: string, answer: LeadAnswer): void {
   if (answer.action === 'send_back' && answer.instructions) {
     if (!canSendBack(taskId)) {
-      addMessage(taskId, 'fryday', 'reply', `${answer.reply}\n\n(The work cannot go back to the Builder right now: wait until nothing is running, or press Stop, then write again.)`);
+      say(taskId, `${answer.reply}\n\n(The work cannot go back to the Builder right now: wait until nothing is running, or press Stop, then write again.)`);
       return;
     }
-    addMessage(taskId, 'fryday', 'reply', answer.reply);
+    say(taskId, answer.reply);
     void sendBackFromLead(taskId, answer.instructions).catch((err) => {
       console.error(`[fryday-core] the Lead could not send ${taskId} back:`, err);
-      addMessage(taskId, 'fryday', 'reply', `I could not send it back to the Builder: ${err instanceof Error ? err.message : String(err)}`);
+      say(taskId, `I could not send it back to the Builder: ${err instanceof Error ? err.message : String(err)}`);
     });
     return;
   }
   if (answer.action === 'new_task' && answer.instructions && answer.title) {
     const project = getRepo(answer.project);
     if (!project?.verified) {
-      addMessage(taskId, 'fryday', 'reply', `${answer.reply}\n\n(I could not put up the task: "${answer.project}" is not a project set up here. Add it on the Projects page first.)`);
+      say(taskId, `${answer.reply}\n\n(I could not put up the task: "${answer.project}" is not a project set up here. Add it on the Projects page first.)`);
       return;
     }
-    addMessage(taskId, 'fryday', 'reply', answer.reply);
+    say(taskId, answer.reply);
     const proposal: Proposal = { projectId: project.id, title: answer.title.slice(0, 200), description: answer.instructions };
     addMessage(taskId, 'fryday', 'proposal', JSON.stringify(proposal));
+    tell({ taskId, kind: 'proposal', projectName: project.name, title: proposal.title });
     return;
   }
-  addMessage(taskId, 'fryday', 'reply', answer.reply);
+  say(taskId, answer.reply);
 }
 
 // ─── Proposals ────────────────────────────────────────────────────────────────
@@ -249,6 +267,16 @@ export function startedProposals(taskId: string): Record<string, string> {
   const task = getTask(taskId);
   const v = task ? taskMetadata(task)['proposals'] : null;
   return v && typeof v === 'object' ? (v as Record<string, string>) : {};
+}
+
+/** The newest proposal on the task that was not started; null when there is none. */
+export function openProposal(taskId: string): { messageId: number; proposal: Proposal } | null {
+  const started = startedProposals(taskId);
+  for (const m of listMessages(taskId).filter((x) => x.kind === 'proposal').reverse()) {
+    const proposal = parseProposal(m.body);
+    if (proposal && !started[String(m.id)]) return { messageId: m.id, proposal };
+  }
+  return null;
 }
 
 /** The owner pressed Start on a proposal: a new task in the other project, linked both ways. */

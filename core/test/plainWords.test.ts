@@ -27,10 +27,10 @@ test('paths become a file name, and long text is clipped', () => {
 test('web addresses become a plain pointer, never a number', () => {
   assert.equal(
     plainText('See https://jenkins.example.com/job/deploy/41/ for details.'),
-    'See the link on the Technical details page for details.',
+    'See the link on the Who did what page for details.',
   );
-  assert.equal(plainText('(https://x.example/a/b)'), '(the link on the Technical details page)');
-  assert.equal(plainText('Done, see https://x.example/a.'), 'Done, see the link on the Technical details page.');
+  assert.equal(plainText('(https://x.example/a/b)'), '(the link on the Who did what page)');
+  assert.equal(plainText('Done, see https://x.example/a.'), 'Done, see the link on the Who did what page.');
 });
 
 test('what an agent is doing, in words', () => {

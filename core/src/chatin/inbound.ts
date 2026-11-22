@@ -26,7 +26,8 @@ import { googleStatus } from './google.js';
 import { listNewMessages, type ChatMessage } from './reader.js';
 import { parseCommand, HELP_TEXT, type Command } from './commands.js';
 import { createTask, getTask } from '../pipeline/taskState.js';
-import { startTask, ownerAnswered, StartError } from '../pipeline/pipeline.js';
+import { startTask, ownerAnswered, StartError, stopTask, StoppedError } from '../pipeline/pipeline.js';
+import { askLead, openProposal, startProposal, LeadError } from '../pipeline/lead.js';
 import { answerQuestion, openQuestions, skipOpenQuestions, QuestionError } from '../pipeline/questions.js';
 import { addMessage } from '../pipeline/thread.js';
 import { ApprovalError, latestApproval, resolveApproval } from '../pipeline/approvals.js';
@@ -233,7 +234,8 @@ async function onAnswer(taskId: string, c: Extract<Command, { kind: 'answer' }>)
     }
     addMessage(taskId, 'owner', 'note', c.text);
     sseEmit({ type: 'task_message', taskId });
-    if (open.length === 0) await reply('Noted for the agents; the next one to start reads it.', { taskId });
+    // The Lead reads it and answers in this thread (notify/owner.ts passes its words on).
+    if (open.length === 0 && !askLead(taskId)) await reply('Noted on the task; FryDay answers when it has finished reading your last message.', { taskId });
     return;
   }
   const q = c.index === null ? open[0]! : open[c.index - 1];
@@ -308,7 +310,27 @@ async function handle(m: ChatMessage, s: InboundState): Promise<void> {
     case 'note':
       addMessage(taskId, 'owner', 'note', c.text);
       sseEmit({ type: 'task_message', taskId });
-      return reply('Noted for the agents; the next one to start reads it.', { taskId });
+      if (!askLead(taskId)) return reply('Noted on the task; FryDay answers when it has finished reading your last message.', { taskId });
+      return;
+    case 'start_proposal': {
+      const waiting = openProposal(taskId);
+      if (!waiting) return reply('There is no proposed task waiting to be started here.', { taskId });
+      try {
+        const { id } = startProposal(taskId, waiting.messageId);
+        return reply(`Started ${id}: ${waiting.proposal.title}. It has a thread of its own.`, { taskId });
+      } catch (err) {
+        if (!(err instanceof LeadError)) throw err;
+        return reply(`Not started: ${err.message}`, { taskId });
+      }
+    }
+    case 'stop':
+      try {
+        await stopTask(taskId);
+        return reply('Stopped. Nothing already done is undone; a build running in Jenkins keeps running there.', { taskId });
+      } catch (err) {
+        if (!(err instanceof StoppedError)) throw err;
+        return reply('There is nothing to stop on this task right now.', { taskId });
+      }
     default:
       return reply('Say `help` to see what works here.', { taskId });
   }

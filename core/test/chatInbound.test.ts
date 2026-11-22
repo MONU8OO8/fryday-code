@@ -29,6 +29,7 @@ import { initDb, getDb } from '../src/db/db';
 import { saveProject } from '../src/registry/registry';
 import { activeRunIds, stopFollowing } from '../src/runner/supervisor';
 import { registerPipeline } from '../src/pipeline/pipeline';
+import { registerLead } from '../src/pipeline/lead';
 import { getTask } from '../src/pipeline/taskState';
 import { latestApproval } from '../src/pipeline/approvals';
 import { listQuestions } from '../src/pipeline/questions';
@@ -76,6 +77,7 @@ before(() => {
   sh(main, 'push', '-q', 'origin', 'main', 'main:stg');
   initDb(process.env.FRYDAY_DB!);
   registerPipeline();
+  registerLead();
   registerOwnerNotifications();
   saveProject({ id: 'shop', name: 'Shop', localPath: main, prodBranch: 'main', stgBranch: 'stg', testCmd: 'node --test', verified: true });
   setGoogleTransport(google.http);
@@ -111,6 +113,10 @@ test('what the owner says is read as a command', () => {
   assert.deepEqual(parseCommand('approve', true), { kind: 'missing_code', decision: 'approve' });
   assert.deepEqual(parseCommand('approve 12345', true), { kind: 'answer', index: null, text: 'approve 12345' }, 'a code is six digits');
   assert.deepEqual(parseCommand('go ahead', true), { kind: 'go_ahead' });
+  assert.deepEqual(parseCommand('start', true), { kind: 'start_proposal' });
+  assert.deepEqual(parseCommand('Start this task.', true), { kind: 'start_proposal' });
+  assert.deepEqual(parseCommand('stop', true), { kind: 'stop' });
+  assert.deepEqual(parseCommand('stop the deploy please', true), { kind: 'answer', index: null, text: 'stop the deploy please' }, 'a sentence is for the Lead, not a command');
   assert.deepEqual(parseCommand('2: use the system setting', true), { kind: 'answer', index: 2, text: 'use the system setting' });
   assert.deepEqual(parseCommand('note: the API is slow on Mondays', true), { kind: 'note', text: 'the API is slow on Mondays' });
   assert.deepEqual(parseCommand('status', false), { kind: 'status' });
@@ -215,6 +221,7 @@ test('questions are answered, skipped and noted from the thread', { skip }, asyn
   agents({
     analyst: [{ summary: 'Unclear.', requirements: ['Something'], areas: [], assumptions: [], risks: [], questions: [{ question: 'Which colour?', why: 'Not said', options: ['Red', 'Blue'] }, { question: 'Where?', why: 'Not said', options: [] }], continueOn: '', continueWhy: '' }, { summary: 'Clear now.', requirements: ['Blue, in the header'], areas: [], assumptions: [], risks: [], questions: [], continueOn: '', continueWhy: '' }],
     planner: PLAN, coder: [{ write: { 'src/math.js': 'exports.add = (a, b) => a + b;\nexports.mul = (a, b) => a * b;\n' } }], tester: [PASS],
+    fryday: [{ reply: 'I will keep the old colours as a fallback.', action: 'none', instructions: '', project: '', title: '' }],
   });
   const m = google.say(OWNER, 'task: Make it nicer\nproject: shop');
   await pollOnce();
@@ -241,9 +248,45 @@ test('questions are answered, skipped and noted from the thread', { skip }, asyn
   google.say(OWNER, 'note: keep the old colours as a fallback', m.thread);
   await pollOnce();
   assert.ok(listMessages(id).some((x) => x.body === 'keep the old colours as a fallback'));
+  // The Lead reads it and answers in the same thread, instead of "the next agent reads it".
+  await waitFor('the Lead to answer in the thread', () => google.posted.some((p) => p.thread === m.thread && /I will keep the old colours as a fallback\./.test(p.text)));
   google.say(OWNER, 'status', m.thread);
   await pollOnce();
   assert.match(lastPost().text, new RegExp(`^${id} is `));
+});
+
+test('the Lead proposes a task in the thread; start and stop work from Chat', { skip }, async () => {
+  agents({
+    planner: PLAN, coder: [{ write: { 'src/math.js': 'exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n' } }], tester: [PASS],
+    fryday: [{ reply: 'The other side must change too. I have put a task for Shop below.', action: 'new_task', instructions: 'Add a search filter to the list.', project: 'shop', title: 'Filter the list' }],
+  });
+  const m = google.say(OWNER, 'task: Add sub\nproject: shop');
+  await pollOnce();
+  const id = tasks().at(-1)!.id;
+  await waitFor('the task to come to rest', () => getTask(id)!.state === 'awaiting_approval' && activeRunIds().length === 0);
+
+  google.say(OWNER, 'does the other side need to change too?', m.thread);
+  await pollOnce();
+  await waitFor('the proposal in the thread', () => google.posted.some((p) => p.thread === m.thread && /A task for Shop: Filter the list\nReply `start` in this thread to start it/.test(p.text)));
+  assert.ok(google.posted.some((p) => p.thread === m.thread && /The other side must change too\./.test(p.text)), 'its answer came first');
+
+  google.say(OWNER, 'start', m.thread);
+  await pollOnce();
+  const follow = tasks().at(-1)!;
+  assert.deepEqual([follow.title, follow.id !== id], ['Filter the list', true]);
+  assert.ok(google.posted.some((p) => p.thread === m.thread && new RegExp(`^Started ${follow.id}: Filter the list`).test(p.text)));
+  google.say(OWNER, 'start', m.thread);               // nothing left to start
+  await pollOnce();
+  assert.ok(google.posted.some((p) => /There is no proposed task waiting to be started here\./.test(p.text)));
+
+  await waitFor('the follow-up to come to rest', () => ['awaiting_approval', 'needs_owner', 'failed'].includes(getTask(follow.id)!.state) && activeRunIds().length === 0);
+  google.say(OWNER, 'stop', m.thread);
+  await pollOnce();
+  assert.equal(getTask(id)!.state, 'needs_owner');
+  assert.ok(google.posted.some((p) => p.thread === m.thread && /^Stopped\. Nothing already done is undone/.test(p.text)));
+  google.say(OWNER, 'stop', m.thread);
+  await pollOnce();
+  assert.ok(google.posted.some((p) => /There is nothing to stop on this task right now\./.test(p.text)));
 });
 
 test('reading off means nothing is acted on, and a broken sign-in is reported, not guessed around', { skip }, async () => {

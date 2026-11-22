@@ -5,11 +5,12 @@ import AgentCrew from '../components/AgentCrew';
 import { useNow } from '../components/Meters';
 import { useRunActivity, toolLabel } from '../hooks/useRunActivity';
 import { fmtDuration } from '../agents';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, GitBranch, Trash2, Rocket, CheckCircle, XCircle, Undo2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, GitBranch, Trash2, Rocket, CheckCircle, XCircle, Undo2 } from 'lucide-react';
 import clsx from 'clsx';
-import { Badge, Button, Card, Section, type BadgeTone } from '../ui';
+import { Avatar, Badge, Button, Card, Section, type BadgeTone } from '../ui';
+import type { Actor } from '../storyTypes';
 import { useSse, useCoreApi } from '../hooks/useSse';
 import { BriefCard, QuestionsCard, ThreadCard, type Brief, type Question, type Attachment, type Message } from './TaskIntake';
 
@@ -80,7 +81,7 @@ interface Round {
   flags: Flag[];
   verdict: Verdict | null;
   verify: Verification | null;
-  outcome: 'passed' | 'changes_requested' | 'escalated' | null;
+  outcome: 'passed' | 'changes_requested' | 'escalated' | 'accepted' | null;
 }
 
 const CHECK_STYLE: Record<Check['status'], { label: string; cls: string }> = {
@@ -95,19 +96,52 @@ const OUTCOME_STYLE: Record<NonNullable<Round['outcome']>, { label: string; tone
   passed: { label: 'Passed', tone: 'ok' },
   changes_requested: { label: 'Sent back to the Builder', tone: 'warn' },
   escalated: { label: 'Handed to you', tone: 'bad' },
+  accepted: { label: 'Accepted by you', tone: 'ok' },
 };
 
 const SUB = 'mb-1 text-xs font-semibold text-hud-dim';
 
-/** A numbered step of the record: what this part is, in a few plain words. */
-function StepLabel({ n, title, hint }: { n: number; title: string; hint?: string }) {
+type StageTone = 'done' | 'working' | 'waiting' | 'problem' | 'idle';
+const STAGE_CHIP: Record<StageTone, { label: string; tone: BadgeTone }> = {
+  done: { label: 'Done', tone: 'ok' },
+  working: { label: 'Working', tone: 'accent' },
+  waiting: { label: 'Needs you', tone: 'warn' },
+  problem: { label: 'Problem', tone: 'bad' },
+  idle: { label: 'Not yet', tone: 'neutral' },
+};
+
+/**
+ * One member of the team on the task's timeline: who, how far they got, and one line of what
+ * they did. Everything else about their part is inside, shown only when the row is opened.
+ */
+function StageRow({ actor, name, summary, tone, startOpen = false, last = false, children }: {
+  actor: Actor; name: string; summary: string; tone: StageTone; startOpen?: boolean; last?: boolean; children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(startOpen);
+  const chip = STAGE_CHIP[tone];
   return (
-    <div className="mb-1.5 mt-5 flex flex-wrap items-baseline gap-x-2">
-      <h2 className="text-sm font-semibold text-hud-bright"><span className="mr-1.5 text-hud-cyan">{n}</span>{title}</h2>
-      {hint && <span className="text-xs text-hud-dim">{hint}</span>}
+    <div className="relative flex gap-3">
+      {!last && <span aria-hidden className={clsx('absolute bottom-0 left-[17px] top-10 w-0.5 rounded', tone === 'idle' ? 'bg-hud-border' : tone === 'problem' ? 'bg-hud-red/40' : 'bg-hud-cyan/40')} />}
+      <div className={clsx('relative z-10 mt-1.5 flex-shrink-0', tone === 'idle' && 'opacity-40')}><Avatar actor={actor} /></div>
+      <div className="mb-3 min-w-0 flex-1">
+        <button type="button" aria-expanded={open} disabled={!children} onClick={() => setOpen((o) => !o)}
+          className={clsx('flex w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60',
+            open ? 'border-hud-cyan/40 bg-hud-cyan/[0.06]' : 'border-hud-border hover:border-hud-cyan/30',
+            tone === 'waiting' && !open && 'border-hud-amber/50', tone === 'problem' && !open && 'border-hud-red/40')}>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-hud-bright">{name}</span>
+            <span className={clsx('block text-sm text-hud-dim', !open && 'truncate')}>{summary}</span>
+          </span>
+          <Badge tone={chip.tone} className={tone === 'working' ? 'animate-pulse motion-reduce:animate-none' : undefined}>{chip.label}</Badge>
+          {children && <ChevronDown aria-hidden className={clsx('h-4 w-4 flex-shrink-0 text-hud-dim transition-transform', open && 'rotate-180')} />}
+        </button>
+        {open && children && <div className="mt-2">{children}</div>}
+      </div>
     </div>
   );
 }
+
+const short = (text: string, max = 120) => { const flat = text.replace(/\s+/g, ' ').trim(); return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat; };
 
 /** A task's state in the words Home uses. */
 const PLAIN_STATE: Record<string, string> = {
@@ -411,6 +445,42 @@ export default function TaskDetail() {
   const canAskAgain = !pending && lastRoundPassed && liveWorkspaces.length > 0 && (!release || release.state === 'stopped' || release.state === 'reverted')
     && ['awaiting_approval', 'needs_owner'].includes(task.state);
 
+  // How far each member of the team got, for the timeline.
+  const lastRound = rounds[rounds.length - 1];
+  const stage: Record<'understand' | 'plan' | 'build' | 'check' | 'release', StageTone> = {
+    understand: brief ? 'done' : task.state === 'waiting_owner' ? 'waiting' : task.state === 'intake' ? 'working' : 'idle',
+    plan: plan ? 'done' : task.state === 'planning' || task.state === 'workspace' ? 'working' : 'idle',
+    build: task.state === 'coding' ? 'working' : rounds.length > 0 ? 'done' : 'idle',
+    check: task.state === 'testing' || task.state === 'verifying' ? 'working'
+      : !lastRound ? 'idle'
+      : lastRound.outcome === 'passed' || lastRound.outcome === 'accepted' ? 'done'
+      : lastRound.outcome === 'escalated' ? 'waiting'
+      : 'working',
+    release: pending ? 'waiting'
+      : task.state === 'releasing' || task.state === 'deploying' ? 'working'
+      : deploy && (deploy.state === 'failed' || deploy.state === 'stopped') ? 'problem'
+      : release?.state === 'stopped' ? 'problem'
+      : deploy?.state === 'succeeded' || release?.state === 'pushed' ? 'done'
+      : 'idle',
+  };
+  const points = lastRound?.verdict?.criteria ?? [];
+  const open = points.filter((c) => !c.met).length;
+  const checkLine = !lastRound ? 'Runs the project\'s own checks, then reviews the change against the plan.'
+    : stage.check === 'working' && lastRound.outcome === null ? `Checking round ${lastRound.round}…`
+    : lastRound.outcome === 'passed' ? `Passed on round ${lastRound.round}${points.length ? `: all ${points.length} points met` : ''}.`
+    : lastRound.outcome === 'accepted' ? `You accepted it on round ${lastRound.round} with ${open} point${open === 1 ? '' : 's'} open.`
+    : lastRound.outcome === 'escalated' ? `Still not passing after ${lastRound.round} rounds${open ? `: ${open} point${open === 1 ? '' : 's'} open` : ''}. Your call.`
+    : `Sent round ${lastRound.round} back to the Builder${open ? `: ${open} point${open === 1 ? '' : 's'} open` : ''}.`;
+  const releaseLine = pending ? `Waiting for your OK: ${short(String(pendingPayload.summary ?? 'a decision'), 90)}`
+    : task.state === 'releasing' ? 'Putting the change on staging…'
+    : task.state === 'deploying' ? 'Deploying staging with Jenkins…'
+    : deploy?.state === 'succeeded' ? 'The staging server is running the new version.'
+    : deploy && (deploy.state === 'failed' || deploy.state === 'stopped') ? `On staging, but the deploy did not finish${deploy.build_number ? ` (Jenkins #${deploy.build_number})` : ''}.`
+    : release?.state === 'pushed' ? `The change is on ${release.stg_branch}.`
+    : release?.state === 'reverted' ? 'The change was taken back off staging.'
+    : release?.state === 'stopped' ? 'Releasing stopped before anything changed on staging.'
+    : 'Puts the change on staging when you approve. Nothing is pushed without your yes.';
+
   // The files of the workspace still in use; a discarded one's, when that is all there is.
   const changedFiles = (liveWorkspaces[0] ?? workspaces[0])?.files ?? [];
 
@@ -426,11 +496,11 @@ export default function TaskDetail() {
       <div className="mb-4 flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="mb-0.5 font-mono text-xs text-hud-dim">{task.id}</div>
-          <h1 className="text-xl font-semibold leading-snug tracking-tight text-hud-bright">{task.title}</h1>
+          <h1 title={task.title} className="line-clamp-2 break-words text-lg font-semibold leading-snug tracking-tight text-hud-bright">{task.title}</h1>
         </div>
         <Badge tone={stateTone} dot className="mt-1">{PLAIN_STATE[task.state] ?? task.state.replace('_', ' ')}</Badge>
       </div>
-      <p className="mb-2 text-sm text-hud-dim">The record of this task, in the order things happened. To talk to the team, use the chat on Home.</p>
+      <p className="mb-2 text-sm text-hud-dim">Who did what, top to bottom. Open a row to see its details. To talk to the team, use the chat on Home.</p>
 
       {note && (
         <div role="status" className={clsx('mb-3 rounded-xl border p-3 text-sm', task.state === 'failed' ? 'border-hud-red/40 text-hud-red' : task.state === 'deployed' ? 'border-hud-green/40 text-hud-green' : 'border-hud-amber/40 text-hud-amber')}>
@@ -445,130 +515,144 @@ export default function TaskDetail() {
         onSkip={() => void act(() => api.post(`/tasks/${id}/questions/skip`, {}))}
       />
 
-      <StepLabel n={1} title="What you asked" />
-      <Card padding="sm" className="mb-3 p-4 text-sm leading-relaxed text-hud-bright whitespace-pre-wrap">{task.description || task.title}</Card>
+      {/* The team, top to bottom: one row each, one line each. Open a row for its details. */}
+      <div className="mt-4">
+        <StageRow actor="you" name="You asked" summary={short(task.description || task.title)} tone="done">
+          <Card padding="sm" className="p-4 text-sm leading-relaxed text-hud-bright whitespace-pre-wrap">{task.description || task.title}</Card>
+        </StageRow>
 
-      <StepLabel n={2} title="What the team understood" hint="The Understander's reading of your words, and anything it had to assume." />
-      <BriefCard brief={brief} attachments={attachments} />
+        <StageRow actor="understander" name="Understander" tone={stage.understand} startOpen={stage.understand === 'waiting'}
+          summary={brief ? short(brief.summary) : stage.understand === 'idle' ? 'Reads your words and the project.' : 'Reading your words and the project…'}>
+          {brief ? <BriefCard brief={brief} attachments={attachments} /> : undefined}
+        </StageRow>
 
-      <StepLabel n={3} title="The plan" hint="A tick is a point the Checker confirmed; a cross is one it did not." />
-      {plan && Array.isArray(plan.criteria) ? <PlanCard plan={plan} verdict={lastVerdict} /> : <p className="mb-3 text-sm text-hud-dim">No plan has been written yet.</p>}
+        <StageRow actor="planner" name="Planner" tone={stage.plan}
+          summary={plan && Array.isArray(plan.criteria) ? `A plan with ${plan.criteria.length} point${plan.criteria.length === 1 ? '' : 's'} to meet${lastVerdict ? `; ${lastVerdict.criteria.filter((c) => c.met).length} confirmed` : ''}.` : stage.plan === 'working' ? 'Writing the plan…' : 'Writes the plan and what must be true when it is done.'}>
+          {plan && Array.isArray(plan.criteria) ? <PlanCard plan={plan} verdict={lastVerdict} /> : undefined}
+        </StageRow>
 
-      {/* 4. What changed: the files, in words */}
-      <StepLabel n={4} title="What changed" hint="The files the Builder touched. Your own copy of the project is not touched until you approve." />
-      {changedFiles.length > 0 ? (
-        <Card padding="sm" className="mb-3 p-4 text-sm">
-          <ul className="space-y-1">
-            {changedFiles.map((f) => (
-              <li key={f.path} className="flex gap-2">
-                <span className={clsx('w-16 flex-shrink-0 text-xs', f.status.startsWith('A') ? 'text-hud-green' : f.status.startsWith('D') ? 'text-hud-red' : 'text-hud-amber')}>
-                  {f.status.startsWith('A') ? 'added' : f.status.startsWith('D') ? 'removed' : 'changed'}
-                </span>
-                <code className="break-all font-mono text-xs text-hud-bright">{f.path}</code>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      ) : <p className="mb-3 text-sm text-hud-dim">Nothing has been changed yet.</p>}
+        <StageRow actor="builder" name="Builder" tone={stage.build}
+          summary={changedFiles.length > 0 ? `Changed ${changedFiles.length} file${changedFiles.length === 1 ? '' : 's'} in ${rounds.length || 1} go${(rounds.length || 1) === 1 ? '' : 'es'}.` : stage.build === 'working' ? 'Writing the change…' : 'Writes the change in its own copy of the project.'}>
+          {changedFiles.length > 0 ? (
+            <Card padding="sm" className="p-4 text-sm">
+              <p className="mb-2 text-xs text-hud-dim">Your own copy of the project is not touched until you approve.</p>
+              <ul className="space-y-1">
+                {changedFiles.map((f) => (
+                  <li key={f.path} className="flex gap-2">
+                    <span className={clsx('w-16 flex-shrink-0 text-xs', f.status.startsWith('A') ? 'text-hud-green' : f.status.startsWith('D') ? 'text-hud-red' : 'text-hud-amber')}>
+                      {f.status.startsWith('A') ? 'added' : f.status.startsWith('D') ? 'removed' : 'changed'}
+                    </span>
+                    <code className="break-all font-mono text-xs text-hud-bright">{f.path}</code>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          ) : undefined}
+        </StageRow>
 
-      {/* 5. How it was checked: the last round open, the earlier ones folded away */}
-      <StepLabel n={5} title="How it was checked" hint="Each round is one go by the Builder, then the project's own checks, then the Checker." />
-      {rounds.length > 0 ? (
-        <div className="mb-3 space-y-2">
-          <RoundCard round={rounds[rounds.length - 1]!} taskId={task.id} />
-          {rounds.length > 1 && (
-            <details>
-              <summary className="cursor-pointer rounded text-sm text-hud-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
-                Earlier rounds ({rounds.length - 1})
-              </summary>
-              <div className="mt-2 space-y-2">
-                {rounds.slice(0, -1).reverse().map((r) => <RoundCard key={r.round} round={r} taskId={task.id} />)}
-              </div>
-            </details>
-          )}
-        </div>
-      ) : <p className="mb-3 text-sm text-hud-dim">Nothing has been checked yet.</p>}
+        <StageRow actor="checker" name="Checker" tone={stage.check} startOpen={stage.check === 'waiting'} summary={checkLine}>
+          {rounds.length > 0 ? (
+            <div className="space-y-2">
+              <RoundCard round={rounds[rounds.length - 1]!} taskId={task.id} />
+              {rounds.length > 1 && (
+                <details>
+                  <summary className="cursor-pointer rounded text-sm text-hud-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
+                    Earlier rounds ({rounds.length - 1})
+                  </summary>
+                  <div className="mt-2 space-y-2">
+                    {rounds.slice(0, -1).reverse().map((r) => <RoundCard key={r.round} round={r} taskId={task.id} />)}
+                  </div>
+                </details>
+              )}
+            </div>
+          ) : undefined}
+        </StageRow>
 
-      <StepLabel n={6} title="Putting it on staging" hint="Nothing is pushed, merged or deployed without your yes." />
-      {!pending && !release && !canAskAgain && !deploy && <p className="mb-3 text-sm text-hud-dim">Not asked for yet.</p>}
-      {/* Release: the owner's yes, and what happened to it */}
-      {(pending || release || canAskAgain) && (
-        <Card padding="sm" className={clsx('mb-3 p-4', pending && 'border-hud-amber/60')}>
-          <div className="mb-2 flex items-center gap-2">
-            <h2 className="flex items-center gap-1.5 text-sm font-semibold text-hud-bright">
-              <Rocket className="h-4 w-4 text-hud-cyan" aria-hidden /> {pushLabel}
-            </h2>
-            {release && <Badge tone={RELEASE_STYLE[release.state].tone} className={release.state === 'running' ? 'animate-pulse motion-reduce:animate-none' : undefined}>{RELEASE_STYLE[release.state].label}</Badge>}
-          </div>
-
-          {pending && (
+        <StageRow actor="releaser" name="Releaser" tone={stage.release} startOpen={stage.release === 'waiting' || stage.release === 'problem'} summary={releaseLine} last>
+          {pending || release || canAskAgain || deploy ? (
             <div>
-              <div className="mb-1 text-sm text-hud-bright">{pendingPayload.summary ?? 'Release this task'}</div>
-              {Array.isArray(pendingPayload.pushes) && (
-                <ul className="mb-2 space-y-0.5 font-mono text-xs text-hud-bright">
-                  {(pendingPayload.pushes as string[]).map((p) => <li key={p}><span className="text-hud-amber">pushes</span> {p}</li>)}
-                  {((pendingPayload.notPushed ?? []) as string[]).map((p) => <li key={p} className="text-hud-dim">{p}</li>)}
-                </ul>
-              )}
-              {Array.isArray(pendingPayload.effects) && (
-                <ul className="mb-2 space-y-0.5 text-sm text-hud-bright">
-                  {(pendingPayload.effects as string[]).map((e) => <li key={e}><span className="text-hud-amber">·</span> {e}</li>)}
-                </ul>
-              )}
-              {pending.action === 'release_stg' && (
-                <div className="mb-3 text-xs text-hud-dim">
-                  Commit <code className="font-mono">{(pending.commit_sha ?? '').slice(0, 8)}</code> · {pendingPayload.filesChanged ?? 0} file{pendingPayload.filesChanged === 1 ? '' : 's'} · {pendingPayload.rounds ?? 0} review round{pendingPayload.rounds === 1 ? '' : 's'}{pendingPayload.verified ? ` · ${pendingPayload.verified}` : ''}
-                  {pendingPayload.flaggedForAttention > 0 && <span className="text-hud-amber"> · {pendingPayload.flaggedForAttention} flagged for your attention</span>}
+          {/* Release: the owner's yes, and what happened to it */}
+          {(pending || release || canAskAgain) && (
+            <Card padding="sm" className={clsx('mb-3 p-4', pending && 'border-hud-amber/60')}>
+              <div className="mb-2 flex items-center gap-2">
+                <h2 className="flex items-center gap-1.5 text-sm font-semibold text-hud-bright">
+                  <Rocket className="h-4 w-4 text-hud-cyan" aria-hidden /> {pushLabel}
+                </h2>
+                {release && <Badge tone={RELEASE_STYLE[release.state].tone} className={release.state === 'running' ? 'animate-pulse motion-reduce:animate-none' : undefined}>{RELEASE_STYLE[release.state].label}</Badge>}
+              </div>
+
+              {pending && (
+                <div>
+                  <div className="mb-1 text-sm text-hud-bright">{pendingPayload.summary ?? 'Release this task'}</div>
+                  {Array.isArray(pendingPayload.pushes) && (
+                    <ul className="mb-2 space-y-0.5 font-mono text-xs text-hud-bright">
+                      {(pendingPayload.pushes as string[]).map((p) => <li key={p}><span className="text-hud-amber">pushes</span> {p}</li>)}
+                      {((pendingPayload.notPushed ?? []) as string[]).map((p) => <li key={p} className="text-hud-dim">{p}</li>)}
+                    </ul>
+                  )}
+                  {Array.isArray(pendingPayload.effects) && (
+                    <ul className="mb-2 space-y-0.5 text-sm text-hud-bright">
+                      {(pendingPayload.effects as string[]).map((e) => <li key={e}><span className="text-hud-amber">·</span> {e}</li>)}
+                    </ul>
+                  )}
+                  {pending.action === 'release_stg' && (
+                    <div className="mb-3 text-xs text-hud-dim">
+                      Commit <code className="font-mono">{(pending.commit_sha ?? '').slice(0, 8)}</code> · {pendingPayload.filesChanged ?? 0} file{pendingPayload.filesChanged === 1 ? '' : 's'} · {pendingPayload.rounds ?? 0} review round{pendingPayload.rounds === 1 ? '' : 's'}{pendingPayload.verified ? ` · ${pendingPayload.verified}` : ''}
+                      {pendingPayload.flaggedForAttention > 0 && <span className="text-hud-amber"> · {pendingPayload.flaggedForAttention} flagged for your attention</span>}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="success" onClick={() => resolve('approved')} disabled={busy} icon={<CheckCircle className="h-4 w-4" aria-hidden />}>
+                      {pending.action === 'release_stg' ? 'Approve and merge' : pending.action === 'push_branch' ? 'Approve and push' : pending.action === 'deploy_stg' ? 'Approve and deploy' : pending.action === 'deploy_input' ? `Answer "${pendingPayload.summary?.match(/Answer "([^"]+)"/)?.[1] ?? 'Proceed'}"` : 'Yes, continue'}
+                    </Button>
+                    <Button variant="secondary" onClick={() => resolve('rejected')} disabled={busy} icon={<XCircle className="h-4 w-4" aria-hidden />}>
+                      {['release_stg', 'push_branch', 'deploy_stg', 'deploy_input'].includes(pending.action) ? 'Decline' : 'No, stop here'}
+                    </Button>
+                  </div>
                 </div>
               )}
-              <div className="flex flex-wrap gap-2">
-                <Button variant="success" onClick={() => resolve('approved')} disabled={busy} icon={<CheckCircle className="h-4 w-4" aria-hidden />}>
-                  {pending.action === 'release_stg' ? 'Approve and merge' : pending.action === 'push_branch' ? 'Approve and push' : pending.action === 'deploy_stg' ? 'Approve and deploy' : pending.action === 'deploy_input' ? `Answer "${pendingPayload.summary?.match(/Answer "([^"]+)"/)?.[1] ?? 'Proceed'}"` : 'Yes, continue'}
-                </Button>
-                <Button variant="secondary" onClick={() => resolve('rejected')} disabled={busy} icon={<XCircle className="h-4 w-4" aria-hidden />}>
-                  {['release_stg', 'push_branch', 'deploy_stg', 'deploy_input'].includes(pending.action) ? 'Decline' : 'No, stop here'}
-                </Button>
+
+              {release && (release.merge_sha || release.revert_sha) && (
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-hud-dim">
+                  <span>{release.stg_branch}</span>
+                  {release.strategy && <span>{release.strategy === 'twin' ? `twin ${release.twin_branch}` : 'merge'}</span>}
+                  {release.stg_before_sha && release.merge_sha && <span>{release.stg_before_sha.slice(0, 8)} → <span className="text-hud-bright">{release.merge_sha.slice(0, 8)}</span></span>}
+                  {(release.attempts ?? 1) > 1 && <span>{release.attempts} tries</span>}
+                  {release.revert_sha && <span className="text-hud-amber">reverted by {release.revert_sha.slice(0, 8)}</span>}
+                </div>
+              )}
+
+              <div className="mt-2 flex flex-wrap gap-2">
+                {release?.state === 'pushed' && release.merge_sha && (
+                  <Button size="sm" variant="secondary" onClick={revert} disabled={busy} icon={<Undo2 className="h-3.5 w-3.5" aria-hidden />}>Revert on {release.stg_branch}</Button>
+                )}
+                {canAskAgain && (
+                  <Button size="sm" variant="secondary" onClick={askAgain} disabled={busy} icon={<Rocket className="h-3.5 w-3.5" aria-hidden />}>Ask me again to release</Button>
+                )}
               </div>
-            </div>
+              {error && <p role="alert" className="mt-2 text-sm text-hud-red">{error}</p>}
+            </Card>
           )}
 
-          {release && (release.merge_sha || release.revert_sha) && (
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-hud-dim">
-              <span>{release.stg_branch}</span>
-              {release.strategy && <span>{release.strategy === 'twin' ? `twin ${release.twin_branch}` : 'merge'}</span>}
-              {release.stg_before_sha && release.merge_sha && <span>{release.stg_before_sha.slice(0, 8)} → <span className="text-hud-bright">{release.merge_sha.slice(0, 8)}</span></span>}
-              {(release.attempts ?? 1) > 1 && <span>{release.attempts} tries</span>}
-              {release.revert_sha && <span className="text-hud-amber">reverted by {release.revert_sha.slice(0, 8)}</span>}
-            </div>
+          {deploy && (
+            <DeployCard deploy={deploy} busy={busy}
+              canAskAgain={!pending && release?.state === 'pushed' && ['failed', 'stopped'].includes(deploy.state)}
+              onAskAgain={() => void act(() => api.post(`/tasks/${id}/deploy`, {}))} />
           )}
-
-          <div className="mt-2 flex flex-wrap gap-2">
-            {release?.state === 'pushed' && release.merge_sha && (
-              <Button size="sm" variant="secondary" onClick={revert} disabled={busy} icon={<Undo2 className="h-3.5 w-3.5" aria-hidden />}>Revert on {release.stg_branch}</Button>
-            )}
-            {canAskAgain && (
-              <Button size="sm" variant="secondary" onClick={askAgain} disabled={busy} icon={<Rocket className="h-3.5 w-3.5" aria-hidden />}>Ask me again to release</Button>
-            )}
-          </div>
-          {error && <p role="alert" className="mt-2 text-sm text-hud-red">{error}</p>}
-        </Card>
-      )}
-
-      {deploy && (
-        <DeployCard deploy={deploy} busy={busy}
-          canAskAgain={!pending && release?.state === 'pushed' && ['failed', 'stopped'].includes(deploy.state)}
-          onAskAgain={() => void act(() => api.post(`/tasks/${id}/deploy`, {}))} />
-      )}
-      {!deploy && !pending && release?.state === 'pushed' && task.state === 'needs_owner' && (
-        <Button className="mb-3" size="sm" variant="secondary" onClick={() => void act(() => api.post(`/tasks/${id}/deploy`, {}))} disabled={busy} icon={<Rocket className="h-3.5 w-3.5" aria-hidden />}>
-          Deploy {release.stg_branch} with Jenkins
-        </Button>
-      )}
+          {!deploy && !pending && release?.state === 'pushed' && task.state === 'needs_owner' && (
+            <Button className="mb-3" size="sm" variant="secondary" onClick={() => void act(() => api.post(`/tasks/${id}/deploy`, {}))} disabled={busy} icon={<Rocket className="h-3.5 w-3.5" aria-hidden />}>
+              Deploy {release.stg_branch} with Jenkins
+            </Button>
+          )}
+            </div>
+          ) : undefined}
+        </StageRow>
+      </div>
 
       {/* Everything an engineer may want, out of the way of everyone else */}
       <details className="mt-6 rounded-xl border border-hud-border">
         <summary className="cursor-pointer rounded-xl px-4 py-3 text-sm font-semibold text-hud-bright focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
-          For engineers: agents, tokens, branch and the raw thread
+          For engineers: tokens, branch and the raw thread
         </summary>
         <div className="px-4 pb-4 pt-1">
       {/* The agents: who has the task, how it got there, and the tokens each used */}
