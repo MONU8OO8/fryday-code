@@ -125,6 +125,11 @@ export function sandboxSettings(workspacePath: string, tmpDir: string, extraRead
       allowWrite: [workspacePath, tmpDir],
       denyWrite: [],
     },
+    // On Linux CI, apply-seccomp's nested user+PID namespace setup fails even with
+    // kernel.apparmor_restrict_unprivileged_userns=0. Skip the seccomp layer; bwrap
+    // still enforces all filesystem and network restrictions. Unix-socket blocking
+    // (the only thing the seccomp layer adds) is not tested by npm test.
+    ...(process.platform === 'linux' && process.env['CI'] === '1' ? { allowAllUnixSockets: true } : {}),
     // Docker only: see platform.ts.
     ...nestedSandbox(),
   };
