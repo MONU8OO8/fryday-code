@@ -103,25 +103,34 @@ function srtCli(): string {
   return path.join(path.dirname(pkg), 'dist', 'cli.js');
 }
 
-function srtPkgDir(): string {
+export function srtPkgDir(): string {
   return path.dirname(require.resolve('@anthropic-ai/sandbox-runtime/package.json'));
 }
+
+/**
+ * On Linux CI apply-seccomp cannot create the nested user+PID namespace it installs its
+ * filter in, even with kernel.apparmor_restrict_unprivileged_userns=0, and every sandboxed
+ * command pays for the failed attempt. Skipping that layer leaves bubblewrap enforcing the
+ * filesystem and network restrictions; outbound Unix sockets, all the layer adds, are not
+ * exercised by the tests. The runtime also runs ripgrep over the working directory before
+ * each command to find repositories whose hooks it must write-protect, which at the default
+ * depth of 3 costs seconds a command; 1 (its lowest) still covers the workspace's own.
+ *
+ * Every sandbox on this machine takes these, so they live here rather than at each sandbox.
+ * They come in two pieces because the runtime reads them from different places and silently
+ * drops a key it finds anywhere else — allowAllUnixSockets belongs to the network section.
+ */
+const onLinuxCi = (): boolean => process.platform === 'linux' && !!process.env['CI'];
+export const ciNetworkSettings = (): Record<string, unknown> => (onLinuxCi() ? { allowAllUnixSockets: true } : {});
+export const ciSandboxSettings = (): Record<string, unknown> => (onLinuxCi() ? { mandatoryDenySearchDepth: 1 } : {});
 
 function nodeInstallDir(): string {
   return path.dirname(path.dirname(fs.realpathSync(process.execPath)));
 }
 
 export function sandboxSettings(workspacePath: string, tmpDir: string, extraReadPaths: string[] = [], allowedDomains: string[] = [], localNetwork = false): Record<string, unknown> {
-  // On Linux CI, apply-seccomp cannot create the nested user+PID namespace it installs the
-  // filter in, even with kernel.apparmor_restrict_unprivileged_userns=0, and every sandboxed
-  // command pays for the attempt. allowAllUnixSockets skips that layer; bwrap still enforces
-  // the filesystem and network restrictions, and outbound Unix sockets (all the layer adds)
-  // are not exercised by the test suite.
-  const linuxCi = process.platform === 'linux' && !!process.env['CI'];
   return {
-    // allowAllUnixSockets belongs to the network section: the runtime reads it as
-    // network.allowAllUnixSockets, and a copy at the top level is dropped by its schema.
-    network: { allowedDomains, deniedDomains: [], ...(localNetwork ? { allowLocalBinding: true } : {}), ...(linuxCi ? { allowAllUnixSockets: true } : {}) },
+    network: { allowedDomains, deniedDomains: [], ...(localNetwork ? { allowLocalBinding: true } : {}), ...ciNetworkSettings() },
     filesystem: {
       // An absolute path: this runtime does not expand a bare "~/" (verified by test).
       denyRead: [os.homedir()],
@@ -133,12 +142,7 @@ export function sandboxSettings(workspacePath: string, tmpDir: string, extraRead
       allowWrite: [workspacePath, tmpDir],
       denyWrite: [],
     },
-    // Before every sandboxed command the runtime runs ripgrep over the working directory to
-    // find repositories whose hooks it must write-protect. At the default depth of 3 that
-    // walk costs seconds per command on a CI runner and the suite starts hundreds of them;
-    // 1 (the lowest the runtime accepts) still covers the workspace's own repository, which
-    // is the only one the tests create.
-    ...(linuxCi ? { mandatoryDenySearchDepth: 1 } : {}),
+    ...ciSandboxSettings(),
     // Docker only: see platform.ts.
     ...nestedSandbox(),
   };

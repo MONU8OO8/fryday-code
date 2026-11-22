@@ -26,6 +26,7 @@ import { policyCliFlags, type AgentRole } from '../guard/policy.js';
 import { writeRunGuard, type McpRule } from '../guard/runGuard.js';
 import { parseLine, type ClaudeEvent } from './streamParser.js';
 import { nestedSandbox } from '../platform.js';
+import { ciNetworkSettings, ciSandboxSettings, srtPkgDir } from '../pipeline/sandbox.js';
 
 export type RunnerId = 'claude' | 'cursor' | 'claude-ssh';
 
@@ -190,14 +191,17 @@ export function cursorSandbox(workspacePath: string, home: string, tmp: string, 
   // The install folder holds the program and its bundled runtime; nothing of the owner's.
   const install = path.dirname(bin);
   return {
-    network: { allowedDomains: CURSOR_HOSTS, deniedDomains: [] },
+    network: { allowedDomains: CURSOR_HOSTS, deniedDomains: [], ...ciNetworkSettings() },
     filesystem: {
       denyRead: [os.homedir()],
-      allowRead: [workspacePath, home, tmp, install, nodeInstallDir(), ...stdioFiles],
+      // srtPkgDir: the sandbox runtime runs apply-seccomp out of its own package, and a
+      // checkout under the home folder would otherwise be hidden by the denyRead above.
+      allowRead: [workspacePath, home, tmp, install, nodeInstallDir(), srtPkgDir(), ...stdioFiles],
       // The checkout is read-only for Cursor; it may write only its own throwaway home and temp folder.
       allowWrite: [home, tmp],
       denyWrite: [],
     },
+    ...ciSandboxSettings(),
     ...nestedSandbox(),
   };
 }

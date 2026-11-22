@@ -7,6 +7,7 @@ import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { runSandboxed, sandboxSettings } from '../src/pipeline/sandbox';
+import { cursorSandbox } from '../src/runner/runners';
 import { SandboxRuntimeConfigSchema } from '@anthropic-ai/sandbox-runtime/dist/sandbox/sandbox-config.js';
 
 // The sandbox is an OS feature; these tests run for real on macOS (the platform Fryday runs on).
@@ -58,11 +59,19 @@ test('writes work inside the workspace and the temp folder, and nowhere else', {
   ].join('; '));
   assert.match(r.output, /inside: ok/);
   assert.match(r.output, /tmp: ok/);
-  for (const where of ['outside', 'home', 'slash-tmp', 'scratch']) assert.match(r.output, new RegExp(`${where}: blocked`), where);
+  for (const where of ['outside', 'slash-tmp']) assert.match(r.output, new RegExp(`${where}: blocked`), where);
+  // macOS refuses these two outright. bubblewrap instead hides the home folder behind a
+  // throwaway tmpfs, and makes the folder holding the temp folder writable to reach the one
+  // inside it, so there the writes report success. Either way they must not land on this
+  // machine, which is what the checks below hold both platforms to.
+  if (process.platform === 'darwin') {
+    for (const where of ['home', 'scratch']) assert.match(r.output, new RegExp(`${where}: blocked`), where);
+  }
   assert.equal(fs.existsSync(path.join(workspace, 'made-inside.txt')), true);
   assert.equal(fs.existsSync(path.join(outside, 'pwned.txt')), false);
-  assert.equal(fs.existsSync(path.join(os.homedir(), 'fryday-sandbox-test-pwned.txt')), false);
+  assert.equal(fs.existsSync(path.join(os.homedir(), 'fryday-sandbox-test-pwned.txt')), false, 'a write reached the owner home folder');
   assert.equal(fs.existsSync('/private/tmp/fryday-sandbox-test-pwned.txt'), false);
+  assert.equal(fs.existsSync(path.join(scratch, 'pwned.json')), false, 'a write reached the scratch folder');
 });
 
 test('the home folder cannot be read, and HOME points at a throwaway folder', { skip }, async () => {
@@ -156,18 +165,23 @@ test('nothing is left behind in the scratch folder', { skip }, () => {
 // written in the wrong place is silently lost and the restriction it asks for never applies.
 // This reads the settings back through that schema and fails on anything it did not keep.
 test('every setting is in a place the sandbox runtime reads', () => {
-  const settings = sandboxSettings(workspace, scratch, [], ['example.invalid']);
-  const parsed = SandboxRuntimeConfigSchema.safeParse(settings);
-  assert.ok(parsed.success, `the runtime rejected the settings: ${JSON.stringify(parsed.error?.issues)}`);
+  const sandboxes: Record<string, Record<string, unknown>> = {
+    'the sandbox around a check': sandboxSettings(workspace, scratch, [], ['example.invalid']),
+    'the sandbox around Cursor': cursorSandbox(workspace, path.join(scratch, 'home'), path.join(scratch, 'tmp'), '/usr/local/bin/cursor-agent'),
+  };
+  for (const [what, settings] of Object.entries(sandboxes)) {
+    const parsed = SandboxRuntimeConfigSchema.safeParse(settings);
+    assert.ok(parsed.success, `the runtime rejected ${what}: ${JSON.stringify(parsed.error?.issues)}`);
 
-  const kept = parsed.data as Record<string, Record<string, unknown>>;
-  for (const [key, value] of Object.entries(settings)) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      for (const inner of Object.keys(value)) {
-        assert.notEqual(kept[key]?.[inner], undefined, `${key}.${inner} was dropped by the runtime's schema`);
+    const kept = parsed.data as Record<string, Record<string, unknown>>;
+    for (const [key, value] of Object.entries(settings)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        for (const inner of Object.keys(value)) {
+          assert.notEqual(kept[key]?.[inner], undefined, `${what}: ${key}.${inner} was dropped by the runtime's schema`);
+        }
+      } else {
+        assert.notEqual(kept[key], undefined, `${what}: ${key} was dropped by the runtime's schema`);
       }
-    } else {
-      assert.notEqual(kept[key], undefined, `${key} was dropped by the runtime's schema`);
     }
   }
 });

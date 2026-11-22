@@ -25,10 +25,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # Linux needs far longer than macOS: bubblewrap costs seconds per sandboxed
-    # command where the macOS backend costs milliseconds, and the suite runs
-    # hundreds of them. macOS finishes in about three minutes either way.
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -79,9 +76,9 @@ jobs:
         run: npm run typecheck
 
       - name: Tests
-        # test:ci runs files sequentially (--test-concurrency=1) so that parallel bwrap
-        # sandbox processes do not compete for CPU on the 2-core GitHub Actions runner,
-        # which otherwise pushes every sandbox-dependent test past its timeout.
+        # test:ci runs the files one at a time. They each start sandboxes, git repositories
+        # and scratch folders on a two-core runner, and running them alone keeps what a test
+        # sees down to what it set up. The whole suite still takes about two minutes.
         run: npm run test:ci
         env:
           FRYDAY_DESKTOP_NOTIFY: 'off'
