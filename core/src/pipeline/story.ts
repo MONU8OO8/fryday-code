@@ -19,7 +19,7 @@ import { getTask, taskMetadata, type TaskRow } from './taskState.js';
 import { listMessages } from './thread.js';
 import { getWorkspaces } from './workspaces.js';
 import { loadJenkinsCredentials } from '../deploy/config.js';
-import { stoppedChoices, type StoppedChoices } from './stopped.js';
+import { stoppedChoices, canStop, canSendBack, type StoppedChoices } from './stopped.js';
 import type { QuestionOption } from './questions.js';
 import type { Round } from './rounds.js';
 import { ACTOR_NAME, actorOfRole, capital, checkName, clip, doingText, formatTokens, joinWords, plainText, times, type Actor } from './plainWords.js';
@@ -80,6 +80,10 @@ export interface StoryInput {
   choices?: StoppedChoices;
   /** The task had a workspace and every one was discarded: its work is gone, it cannot go on. */
   discarded?: boolean;
+  /** What the Builder reported at the end of each round, by round: its own account of the work. */
+  builderSaid?: Record<number, string>;
+  /** The work can be sent back to the Builder with what the owner found (canSendBack). */
+  canSendBack?: boolean;
 }
 
 /** The stored facts an ending is read from. Approvals in any order. */
@@ -152,6 +156,12 @@ function plainNote(note: string): string {
 }
 
 const said = (text: string, max = 280) => clip(plainText(text), max);
+/** The opening of an agent's Markdown report, as plain text: its first paragraph, without markup. */
+function builderWords(report: string): string {
+  const first = report.trim().split(/\n\s*\n/)[0] ?? '';
+  return plainText(first.replace(/^#+\s*/gm, '').replace(/\*\*/g, '').replace(/\s*\n\s*/g, ' '));
+}
+
 /** Whole sentences from the start of text, as many as fit in max (at least the first, clipped). */
 function sentences(text: string, max: number): string {
   let out = '';
@@ -167,8 +177,9 @@ function sentences(text: string, max: number): string {
 const endSentence = (text: string) => (!text || /[.!?…]$/.test(text) ? text : `${text}.`);
 
 /** FryDay's reply to a note of the owner's that no agent has read yet: what happens with it now. */
-function ackWhileWaiting(state: string, pendingApproval: boolean, choices: StoppedChoices | undefined): string {
+function ackWhileWaiting(state: string, pendingApproval: boolean, choices: StoppedChoices | undefined, sendBack: boolean): string {
   if (choices?.tryAgain) return 'Got it. Press “Try again” below and the Builder starts on it.';
+  if (sendBack) return 'Saved as a note, so nobody is working on it yet. To have the Builder fix it, write it again and press “Send back to fix”.';
   if (pendingApproval) return 'Got it. To go on, press Approve (or Not yet) on the card above. A message does not approve anything.';
   if (state === 'waiting_owner') return 'Got it. The team is waiting for your answer to the question above.';
   if (state === 'needs_owner' || state === 'deployed' || state === 'failed') return 'Saved on the task. Nothing is running right now, so nobody reads it until the task goes on.';
@@ -249,9 +260,10 @@ export function buildStory(input: StoryInput): StoryItem[] {
 
   for (const r of input.rounds) {
     const at = r.createdAt;
+    const own = input.builderSaid?.[r.round];
     add({
       id: `round:${r.round}`, at, from: 'builder', to: 'checks', kind: 'handoff', round: r.round,
-      text: r.round === 1 ? 'Done. Please check it.' : 'Fixed. Please check again.',
+      text: own ? `${endSentence(sentences(builderWords(own), 260))} ${r.round === 1 ? 'Please check it.' : 'Please check again.'}` : r.round === 1 ? 'Done. Please check it.' : 'Fixed. Please check again.',
       details: { label: 'What changed', ref: { kind: 'round', round: r.round, part: 'changes' } },
     });
     const failing = r.checks.filter((c) => c.status === 'failed' || c.status === 'timeout' || c.status === 'error');
@@ -313,7 +325,7 @@ export function buildStory(input: StoryInput): StoryItem[] {
   const pendingNow = input.approvals.some((a) => a.state === 'pending');
   for (const n of input.notes) {
     const reader = input.runStarts?.find((r) => r.at > n.at);
-    add({ id: `ack:${n.id}`, at: n.at, from: 'fryday', to: 'you', kind: 'said', text: reader ? `Got it. I passed it on to the ${ACTOR_NAME[actorOfRole(reader.role)]}.` : ackWhileWaiting(t.state, pendingNow, input.choices) });
+    add({ id: `ack:${n.id}`, at: n.at, from: 'fryday', to: 'you', kind: 'said', text: reader ? `Got it. I passed it on to the ${ACTOR_NAME[actorOfRole(reader.role)]}.` : ackWhileWaiting(t.state, pendingNow, input.choices, input.canSendBack === true) });
   }
 
   let pending = false;
@@ -400,6 +412,10 @@ export interface TaskStory {
   choices: StoppedChoices;
   /** Its work was discarded: nothing more can happen on it. */
   discarded: boolean;
+  /** POST /api/tasks/:id/stop is available. */
+  canStop: boolean;
+  /** POST /api/tasks/:id/send-back { note } is available. */
+  canSendBack: boolean;
 }
 
 export type AskAgain = 'release' | 'deploy' | null;
@@ -417,8 +433,11 @@ export interface AskAgainFacts {
   hasDeployer?: boolean;
   /** Jenkins itself is set up on this machine. Without it a deploy cannot be started at all. */
   jenkinsReady?: boolean;
-  release: { state: string } | null;
+  /** head: the commit that was merged, when known. */
+  release: { state: string; head?: string | null } | null;
   deploy: { state: string } | null;
+  /** The commit the task's work is at now, when known. */
+  head?: string | null;
 }
 
 /**
@@ -426,7 +445,14 @@ export interface AskAgainFacts {
  * canAskAgain and the deploy card's ask again), plus a staging branch to release to.
  */
 export function askAgainOf(f: AskAgainFacts): AskAgain {
+  // Only a task at rest with the owner: while agents are rewriting the change, deploying what
+  // is on staging would put up a version the owner already said is not right.
+  if (f.state !== 'awaiting_approval' && f.state !== 'needs_owner') return null;
   if (f.approvals.some((a) => a.state === 'pending')) return null;
+  // On staging already, but the work moved on since (it was sent back and fixed): the new
+  // commits need their own merge before any deploy means anything.
+  const movedOn = f.release?.state === 'pushed' && !!f.head && !!f.release.head && f.release.head !== f.head;
+  if (movedOn && roundCleared(f.lastRoundOutcome) && f.hasLiveWorkspace && f.hasStaging && (f.state === 'awaiting_approval' || f.state === 'needs_owner')) return 'release';
   // Asking again starts a Jenkins job, so without Jenkins set up here there is nothing to offer:
   // the task already says so in the chat, with what to do instead.
   // A deploy that ran is proof enough of a deployer; a task that never got one needs hasDeployer.
@@ -485,7 +511,7 @@ export function taskStory(taskId: string): TaskStory | null {
   const messages = listMessages(taskId);
   const approvals = (db.prepare('SELECT id, action, state, payload_json, requested_at, resolved_at FROM approvals WHERE task_id = ? ORDER BY requested_at').all(taskId) as Array<{ id: string; action: string; state: string; payload_json: string; requested_at: number; resolved_at: number | null }>)
     .map((a) => ({ id: a.id, action: a.action, state: a.state, payload: parsePayload(a.payload_json), requestedAt: a.requested_at, resolvedAt: a.resolved_at }));
-  const release = db.prepare('SELECT id, state, started_at FROM releases WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { id: string; state: string; started_at: number } | undefined;
+  const release = db.prepare('SELECT id, state, started_at, head_sha FROM releases WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { id: string; state: string; started_at: number; head_sha: string | null } | undefined;
   const deploy = db.prepare('SELECT id, state, started_at FROM deploys WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { id: string; state: string; started_at: number } | undefined;
   const projectName = projectNameOf(task);
   const note = taskMetadata(task)['note'];
@@ -500,6 +526,12 @@ export function taskStory(taskId: string): TaskStory | null {
   const choices = stoppedChoices(taskId);
   const workspaces = getWorkspaces(taskId);
   const discarded = workspaces.length > 0 && workspaces.every((w) => w.removed_at !== null);
+  const sendBack = canSendBack(taskId);
+  // The Builder's own report for each round: its last finished run in that round.
+  const builderSaid: Record<number, string> = {};
+  for (const r of db.prepare(`SELECT round, result_text FROM runs WHERE task_id = ? AND role = 'coder' AND state = 'completed' AND result_text IS NOT NULL ORDER BY started_at`).all(taskId) as Array<{ round: number; result_text: string }>) {
+    builderSaid[r.round] = r.result_text;
+  }
 
   const items = buildStory({
     task: { id: task.id, title: task.title, description: task.description, state: task.state, createdAt: task.created_at, note: typeof note === 'string' ? note : null },
@@ -517,6 +549,8 @@ export function taskStory(taskId: string): TaskStory | null {
     runStarts: runs.map((r) => ({ role: r.role, at: r.started_at })),
     choices,
     discarded,
+    builderSaid,
+    canSendBack: sendBack,
   });
 
   const live = runs.filter((r) => r.state === 'running').at(-1);
@@ -530,12 +564,15 @@ export function taskStory(taskId: string): TaskStory | null {
     now,
     choices,
     discarded,
+    canStop: canStop(taskId),
+    canSendBack: sendBack,
     askAgain: askAgainOf({
       state: task.state, approvals, hasStaging: has.hasStaging, hasDeployer: has.hasDeployer,
       jenkinsReady: loadJenkinsCredentials() !== null,
       lastRoundOutcome: rounds.at(-1)?.outcome ?? null,
       hasLiveWorkspace: workspaces.some((w) => w.removed_at === null),
-      release: release ?? null,
+      release: release ? { state: release.state, head: release.head_sha } : null,
+      head: workspaces.find((w) => w.removed_at === null)?.head_sha ?? null,
       deploy: deploy ?? null,
     }),
   };

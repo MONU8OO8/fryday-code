@@ -37,7 +37,7 @@ process.env.FRYDAY_RETRY_BACKOFF_MS = '0';
 import { initDb, getDb } from '../src/db/db';
 import { overrideRepo, saveProject } from '../src/registry/registry';
 import { activeRunIds, stopFollowing } from '../src/runner/supervisor';
-import { startTask, registerPipeline, StartError, stoppedChoices, tryAgainAfterStop, acceptAsItIs, StoppedError } from '../src/pipeline/pipeline';
+import { startTask, registerPipeline, StartError, stoppedChoices, tryAgainAfterStop, acceptAsItIs, StoppedError, stopTask, sendBackToBuilder, canSendBack, canStop } from '../src/pipeline/pipeline';
 import { addMessage } from '../src/pipeline/thread';
 import { getWorkspaces, discardWorkspaces, readGuidance } from '../src/pipeline/workspaces';
 import { getRounds } from '../src/pipeline/rounds';
@@ -302,6 +302,57 @@ test('trying again gives the Builder one more round, and the Checker reads what 
   assert.match(coders.at(-1)!.prompt, /Skip the lint check/, 'the Builder is told');
   const brief = calls().filter((c) => c.role === 'tester').at(-1)!.files!.brief;
   assert.match(brief, /## What the owner said[\s\S]*Skip the lint check: this project has no lint set up\./, 'so is the Checker');
+});
+
+// The owner tried the work and it is not right. Before, what they wrote was kept as a note that
+// no agent read, because nothing started again once a task had passed review.
+test('work that passed can be sent back to the Builder with what the owner found', { skip }, async () => {
+  script({ coder: [good], tester: [pass] });
+  const id = addTask('Add mul, then find it does not work');
+  assert.equal(await runToRest(id), 'awaiting_approval');
+  assert.equal(canSendBack(id), true);
+  await assert.rejects(sendBackToBuilder(id, '   '), StoppedError, 'an empty note says nothing to fix');
+
+  await sendBackToBuilder(id, 'mul(2, -3) gives the wrong sign when I try it.');
+  assert.equal(getTask(id)!.state, 'coding');
+  assert.equal(canSendBack(id), false, 'not while the Builder is on it');
+  await assert.rejects(sendBackToBuilder(id, 'again'), StoppedError);
+  while (getTask(id)!.state !== 'awaiting_approval' || activeRunIds().length > 0) {
+    assert.notEqual(getTask(id)!.state, 'failed', note(id));
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.deepEqual(outcomes(id), ['passed', 'passed'], 'one more round, checked again');
+  const coders = calls().filter((c) => c.role === 'coder');
+  assert.equal(coders.length, 2);
+  assert.match(coders.at(-1)!.prompt, /The owner tried the change and it does not do what they need/);
+  assert.match(coders.at(-1)!.prompt, /mul\(2, -3\) gives the wrong sign/, 'with their own words');
+  assert.match(coders.at(-1)!.prompt, /which project it belongs in/, 'and told to name work that belongs elsewhere');
+});
+
+test('stopping a task withdraws what waits on the owner and runs nothing more', { skip }, async () => {
+  script({ coder: [good], tester: [pass] });
+  const id = addTask('Add mul, then stop');
+  assert.equal(await runToRest(id), 'awaiting_approval');
+  assert.equal(canStop(id), true);
+  await stopTask(id);
+  assert.equal(getTask(id)!.state, 'needs_owner');
+  assert.match(note(id), /^You stopped the task/);
+  assert.equal(getDb().prepare(`SELECT COUNT(*) AS n FROM approvals WHERE task_id = ? AND state = 'pending'`).get(id)!.n, 0);
+  assert.equal(activeRunIds().length, 0);
+  assert.equal(canStop(id), false, 'nothing left to stop');
+  // The work is still there, so it can be sent back to be fixed from here.
+  assert.equal(canSendBack(id), true);
+});
+
+test('stopping a task while an agent is working stops the agent', { skip }, async () => {
+  script({ coder: [{ ...good, tokens: 1_000 }], tester: [pass] }); // keeps working turn after turn
+  const id = addTask('Add mul slowly, then stop');
+  startTask(id, REPO);
+  await waitUntil('the coder to start', () => getTask(id)!.state === 'coding' && activeRunIds().length > 0);
+  await stopTask(id);
+  await waitUntil('the coder to stop', () => activeRunIds().length === 0, 20_000);
+  assert.equal(getTask(id)!.state, 'needs_owner', 'the coder exiting does not hand it over a second time');
+  assert.match(note(id), /^You stopped the task/);
 });
 
 test('a check that already failed before the task does not block it', { skip }, async () => {

@@ -91,7 +91,9 @@ export function requestReleaseApproval(taskId: string): ApprovalRow {
   const repo = getRepo(ws.repo_id);
   if (!repo?.stgBranch) throw new ApprovalError(409, `${repo?.name ?? ws.repo_id} has no staging branch in the registry`);
   const release = latestRelease(taskId);
-  if (release?.state === 'pushed') throw new ApprovalError(409, `${taskId} is already merged into ${release.stg_branch}`);
+  // Already on staging, unless the work changed since (the owner sent it back and it was fixed):
+  // then the new commits need a merge of their own.
+  if (release?.state === 'pushed' && release.head_sha === ws.head_sha) throw new ApprovalError(409, `${taskId} is already merged into ${release.stg_branch}`);
   if (release?.state === 'running') throw new ApprovalError(409, `${taskId} is being released right now`);
 
   const files = ws.files_json ? (JSON.parse(ws.files_json) as unknown[]).length : 0;

@@ -440,3 +440,28 @@ test('the Checker\'s words in the stop message end on a whole sentence', () => {
   const items = buildStory(base({ task: { ...base().task, state: 'needs_owner', note: 'x' }, rounds: [round(3, 600, { met: [false] })], choices: { tryAgain: true, accept: true, why } }));
   assert.match(items.at(-1)!.text, /The Checker says: The code looks correct, but criterion 10 is only half met\. npm run build succeeds: the \/user route built at 5\.43 kB\. It is your call/);
 });
+
+test('the Builder says in its own words what it did, not just "Fixed"', () => {
+  const report = "I fixed the loader in `getUsers`. `npm run lint` still cannot pass: the repo has no ESLint config.\n\n**Fixed in `src/pages/user/index.tsx`:**\n- a long list that should not reach the chat";
+  const items = buildStory(base({ rounds: [round(1, 400, { met: [true] }), round(2, 500, { met: [true] })], builderSaid: { 2: report } }));
+  const said = items.filter((i) => i.kind === 'handoff' && i.from === 'builder').map((i) => i.text);
+  assert.equal(said[0], 'Done. Please check it.', 'a round with no report keeps the short line');
+  assert.equal(said[1], 'I fixed the loader in `getUsers`. `npm run lint` still cannot pass: the repo has no ESLint config. Please check again.');
+});
+
+test('a note on work that can go back to the Builder says how to send it there', () => {
+  const items = buildStory(base({ task: { ...base().task, state: 'needs_owner' }, notes: [{ id: 1, body: 'it does not work', at: 900 }], runStarts: [], canSendBack: true }));
+  assert.match(items.find((i) => i.id === 'ack:1')!.text, /^Saved as a note, so nobody is working on it yet\. .*Send back to fix/);
+});
+
+test('work that changed after it was merged into staging is offered for a new merge first', () => {
+  const facts = { state: 'needs_owner', approvals: [], lastRoundOutcome: 'passed', hasLiveWorkspace: true, hasStaging: true, hasDeployer: true, jenkinsReady: true, deploy: null };
+  assert.equal(askAgainOf({ ...facts, release: { state: 'pushed', head: 'aaa1111' }, head: 'bbb2222' }), 'release', 'the new commits need their own merge');
+  assert.equal(askAgainOf({ ...facts, release: { state: 'pushed', head: 'aaa1111' }, head: 'aaa1111' }), 'deploy', 'the same commit is on staging: deploy it');
+});
+
+test('nothing is offered to deploy again while the agents are rewriting the change', () => {
+  const pushed = { approvals: [], lastRoundOutcome: 'passed', hasLiveWorkspace: true, hasStaging: true, hasDeployer: true, jenkinsReady: true, release: { state: 'pushed' }, deploy: { state: 'stopped' } };
+  assert.equal(askAgainOf({ ...pushed, state: 'needs_owner' }), 'deploy');
+  for (const state of ['coding', 'testing', 'verifying']) assert.equal(askAgainOf({ ...pushed, state }), null, state);
+});

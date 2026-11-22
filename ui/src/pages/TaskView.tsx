@@ -48,6 +48,15 @@ export default function TaskView({ id }: { id: string }) {
   };
   const tryAgain = () => void act(async () => { await api.post(`/tasks/${encodeURIComponent(id)}/try-again`, { note: reply.trim() }); setReply(''); });
   const accept = () => void act(() => api.post(`/tasks/${encodeURIComponent(id)}/accept`, {}));
+  const stop = () => {
+    if (!window.confirm('Stop this task? Agents stop and open questions are withdrawn. Nothing already done is undone, and a build already running in Jenkins keeps running there.')) return;
+    void act(() => api.post(`/tasks/${encodeURIComponent(id)}/stop`, {}));
+  };
+  const sendBack = () => {
+    const note = reply.trim();
+    if (!note) return;
+    void act(async () => { await api.post(`/tasks/${encodeURIComponent(id)}/send-back`, { note }); setReply(''); });
+  };
 
   if (!story) {
     return (
@@ -68,7 +77,8 @@ export default function TaskView({ id }: { id: string }) {
   }
   const { task, journey, now, askAgain } = story;
   const choices = story.choices?.tryAgain ? story.choices : null;
-  const finished = !choices && (journey.finished !== null || task.state === 'deployed' || task.state === 'failed' || story.discarded === true);
+  // Work that can still go back to the Builder is not finished, wherever its journey has got to.
+  const finished = !choices && !story.canSendBack && (journey.finished !== null || task.state === 'deployed' || task.state === 'failed' || story.discarded === true);
   const pendingApproval = story.items.some((i) => i.action?.kind === 'approve');
   const yourTurn = now ? null
     : openQuestion ? 'answer the question below. You can tap an answer or type your own in the box at the bottom.'
@@ -80,7 +90,10 @@ export default function TaskView({ id }: { id: string }) {
       <Link to="/home" className="md:hidden text-sm text-hud-cyan mb-2">← All tasks</Link>
       <PageHeader title={<span title={task.title} className="line-clamp-2 break-words">{task.title}</span>}
         subtitle={<>{task.projectName ?? 'Project not chosen yet'} · started {ago(task.createdAt)} · {fmtTokens(task.budget.usedTokens)} of {fmtTokens(task.budget.limitTokens)} tokens</>}
-        actions={<Link to={`/home/${id}/details`} className={buttonClass('ghost', 'sm')}>Technical details</Link>} />
+        actions={<>
+          {story.canStop && <Button variant="danger" size="sm" disabled={busy} onClick={stop}>Stop</Button>}
+          <Link to={`/home/${id}/details`} className={buttonClass('ghost', 'sm')}>Technical details</Link>
+        </>} />
       <TeamStrip story={story} />
       <JourneyLine key={id} journey={journey} />
       {now && (
@@ -99,11 +112,11 @@ export default function TaskView({ id }: { id: string }) {
         onAnswer={(qid, answer) => void act(() => api.post(`/tasks/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`, { answer }))}
         onDecide={(aid, decision) => void act(() => api.post(`/approvals/${encodeURIComponent(aid)}/resolve`, { decision }))} />
       {error && <p role="alert" className="text-sm text-hud-red mt-2">{error}</p>}
-      {askAgain && (
+      {askAgain && !now && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-hud-amber/40 bg-hud-amber/10 px-3.5 py-2.5 mt-3 text-sm">
           <span className="flex-1 min-w-0">{askAgain === 'release' ? 'The change is ready. Ask me again when you want it put on staging.' : 'The staging server was not updated. Try the deploy again?'}</span>
           <Button size="sm" disabled={busy} onClick={() => void act(() => api.post(`/tasks/${encodeURIComponent(id)}/${askAgain === 'release' ? 'approval' : 'deploy'}`, {}))}>
-            {askAgain === 'release' ? 'Ask me again' : 'Try again'}
+            {askAgain === 'release' ? 'Ask me again' : 'Deploy again'}
           </Button>
         </div>
       )}
@@ -127,6 +140,24 @@ export default function TaskView({ id }: { id: string }) {
           {story.discarded ? <>This task's work was discarded. <Link to="/home" className="text-hud-cyan underline">Start a new task</Link> to try again.</> : 'This task is finished.'}
         </p>
       ) : (
+      story.canSendBack && !openQuestion ? (
+        // The work has been through review and nothing runs: what the owner writes is either
+        // something to fix (it goes to the Builder now) or just a note on the task.
+        <form onSubmit={(e) => { e.preventDefault(); sendBack(); }} className="mt-4 pt-4 border-t border-hud-border">
+          <div className="flex gap-2">
+            <input value={reply} onChange={(e) => setReply(e.target.value)} aria-label="What is wrong"
+              placeholder="What is wrong? For example: “the search box shows no results”"
+              className={clsx(controlClass(), 'flex-1 min-w-0')} />
+            <Button type="submit" disabled={busy || !reply.trim()}>Send back to fix</Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
+            <span className="text-xs text-hud-dim">The Builder gets one more round with your words, then the checks and the Checker run again.</span>
+            <button type="button" className="text-xs text-hud-cyan hover:underline disabled:opacity-50" disabled={busy || !reply.trim()} onClick={(e) => send(e as unknown as FormEvent)}>
+              Just save it as a note
+            </button>
+          </div>
+        </form>
+      ) : (
       <form onSubmit={send} className="flex gap-2 mt-4 pt-4 border-t border-hud-border">
         <input value={reply} onChange={(e) => setReply(e.target.value)}
           placeholder={openQuestion?.freeText ? 'Type your answer to the question above…' : 'Tell the team something (they read it when they next start)…'}
@@ -134,6 +165,7 @@ export default function TaskView({ id }: { id: string }) {
           className={clsx(controlClass(), 'flex-1 min-w-0')} />
         <Button type="submit" disabled={busy || !reply.trim()}>{openQuestion?.freeText ? 'Answer' : 'Send'}</Button>
       </form>
+      )
       )}
     </div>
   );

@@ -31,7 +31,7 @@ import { evidenceDir, isVerifying } from '../pipeline/verifyFlow.js';
 import { ApprovalError, latestApproval, publicApproval, requestReleaseApproval } from '../pipeline/approvals.js';
 import { ReleaseError, latestRelease, revertTaskRelease } from '../pipeline/releaseFlow.js';
 import { setTaskNote, getTask, createTask } from '../pipeline/taskState.js';
-import { ownerAnswered, stoppedChoices, tryAgainAfterStop, acceptAsItIs, StoppedError } from '../pipeline/pipeline.js';
+import { ownerAnswered, stoppedChoices, tryAgainAfterStop, acceptAsItIs, StoppedError, stopTask, sendBackToBuilder } from '../pipeline/pipeline.js';
 import { getConfig } from '../config.js';
 import { AttachmentError, MAX_ATTACHMENT_BYTES, listAttachments, saveAttachment } from '../pipeline/attachments.js';
 import { QuestionError, answerQuestion, listQuestions, skipOpenQuestions } from '../pipeline/questions.js';
@@ -131,6 +131,33 @@ tasksRouter.post('/:id/accept', (req, res) => {
     if (!(err instanceof StoppedError)) throw err;
     res.status(err.status).json({ error: err.message });
   }
+});
+
+// ─── POST /api/tasks/:id/stop · /api/tasks/:id/send-back ──────────────────────
+// Stop: agents stopped, open tickets withdrawn, a followed deploy let go of; nothing undone.
+// Send back: the owner tried the work and it is not right; one more Builder round with their
+// words. Both are the owner's, at the UI only.
+function stoppedReply(res: express.Response, work: () => Promise<void>): void {
+  work().then(() => res.json({ ok: true })).catch((err) => {
+    if (err instanceof StoppedError) { res.status(err.status).json({ error: err.message }); return; }
+    console.error('[fryday-core] task action failed:', err);
+    res.status(500).json({ error: 'It could not be done; see the core log' });
+  });
+}
+
+tasksRouter.post('/:id/stop', (req, res) => {
+  if (res.locals['authVia'] !== 'cookie') { res.status(403).json({ error: 'Stop a task from the FryDay UI' }); return; }
+  const id = req.params['id']!;
+  if (!getTask(id)) { res.status(404).json({ error: 'Task not found' }); return; }
+  stoppedReply(res, () => stopTask(id));
+});
+
+tasksRouter.post('/:id/send-back', (req, res) => {
+  if (res.locals['authVia'] !== 'cookie') { res.status(403).json({ error: 'Send work back from the FryDay UI' }); return; }
+  const id = req.params['id']!;
+  if (!getTask(id)) { res.status(404).json({ error: 'Task not found' }); return; }
+  const note = typeof req.body?.note === 'string' ? req.body.note : '';
+  stoppedReply(res, () => sendBackToBuilder(id, note));
 });
 
 // ─── POST /api/tasks/:id/release/revert ───────────────────────────────────────

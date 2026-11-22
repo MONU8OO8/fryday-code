@@ -56,6 +56,10 @@ export interface TaskStory {
   choices: { tryAgain: boolean; accept: boolean; why: string | null };
   /** Its work was discarded: nothing more can happen on it. */
   discarded?: boolean;
+  /** POST /api/tasks/:id/stop is available. */
+  canStop?: boolean;
+  /** POST /api/tasks/:id/send-back { note } is available: the work can go back to the Builder. */
+  canSendBack?: boolean;
 }
 
 export interface OverviewItem {

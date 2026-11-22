@@ -393,6 +393,16 @@ export function reconcileDeploysOnStartup(): void {
   }
 }
 
+/**
+ * Stop following every deploy of this task that is still going, with a note saying why.
+ * Nothing is cancelled in Jenkins: a build there is the owner's to stop.
+ */
+export function stopFollowingTask(taskId: string, note: string): number {
+  const rows = getDb().prepare(`SELECT * FROM deploys WHERE task_id = ? AND state IN ('queued', 'running', 'waiting_input')`).all(taskId) as DeployRow[];
+  for (const row of rows) end(row, 'stopped', 'owner', note);
+  return rows.length;
+}
+
 /** For tests and shutdown. */
 export function stopAllDeploys(): void {
   for (const id of [...timers.keys()]) stopFollowing(id);

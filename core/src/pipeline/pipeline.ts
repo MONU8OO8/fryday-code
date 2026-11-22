@@ -49,7 +49,8 @@ import { BRIEF_SCHEMA, TRIAGE_SCHEMA, TASK_FOLDER, parseBrief, parseTriage, brie
 import { branchFacts, existsOnRemote, fetchBranches, listCandidates } from './branches.js';
 import { askQuestions, listQuestions, openQuestions } from './questions.js';
 import { addMessage, ownerNotes } from './thread.js';
-import { StoppedError, stoppedChoices } from './stopped.js';
+import { StoppedError, stoppedChoices, canStop, canSendBack } from './stopped.js';
+import { stopFollowingTask } from '../deploy/deployFlow.js';
 import { documentsText } from './attachments.js';
 import { retryWhenBusy, cancelPendingRetry, type RetryStage } from './retry.js';
 import { verifyRound, onTesterRunExit, runProfileOf, isTesterRole, stopVerification, type VerifyHost } from './verifyFlow.js';
@@ -134,6 +135,17 @@ interface Stage {
 
 const CONTINUE_PROMPT =
   'You were stopped because you reached your token limit, and the owner has allowed more. Continue the task from where you stopped, then finish with your report.';
+/**
+ * The owner tried the change and says it does not do what they need. Their words reach the
+ * Builder as "Notes from the owner" (fromTheOwner), so this only says what to do with them.
+ */
+const OWNER_REWORK_PROMPT =
+  '# The owner tried the change and it does not do what they need\n\n' +
+  'Their words are under "Notes from the owner". Find out why the change does not work for them and fix it in this same ' +
+  'workspace. Check your earlier work against what they describe instead of assuming it was right. If part of what they ' +
+  'need cannot be done in this repository (another service, the API the code calls, the backend), do the part that ' +
+  'belongs here, and start your report by saying exactly what the other change is and which project it belongs in.';
+
 const RETRY_PROMPT =
   'You were stopped because the AI service was briefly unavailable. Continue the task from where you stopped, then finish with your report.';
 
@@ -631,7 +643,7 @@ async function startCoder(taskId: string, round: number, feedback: string | null
 
   if (taskTokensLeft(taskId) <= 0) { askToContinue(taskId, { role: 'coder', round }, 'task'); return; }
   const continuing = feedback === CONTINUE_PROMPT;
-  enterState(taskId, 'coding', continuing ? `Round ${round}: continuing after the token limit` : feedback === RETRY_PROMPT ? `Round ${round}: trying again after the AI service was busy` : round === 1 ? `Coding on ${ws.branch}` : `Round ${round}: fixing what the review found`);
+  enterState(taskId, 'coding', continuing ? `Round ${round}: continuing after the token limit` : feedback === RETRY_PROMPT ? `Round ${round}: trying again after the AI service was busy` : feedback === OWNER_REWORK_PROMPT ? `Round ${round}: fixing what you found` : round === 1 ? `Coding on ${ws.branch}` : `Round ${round}: fixing what the review found`);
   await startTaskAgent(taskId, { role: 'coder', round }, {
     taskId,
     role: 'coder',
@@ -869,7 +881,7 @@ function sendBack(taskId: string, round: number, feedback: string, summary: stri
 
 // ─── The owner decides on a task that ran out of rounds ───────────────────────
 
-export { StoppedError, stoppedChoices, type StoppedChoices } from './stopped.js';
+export { StoppedError, stoppedChoices, canStop, canSendBack, type StoppedChoices } from './stopped.js';
 
 /** One more Builder round on a stopped task. The Builder and Checker read what the owner wrote. */
 export async function tryAgainAfterStop(taskId: string): Promise<void> {
@@ -877,6 +889,50 @@ export async function tryAgainAfterStop(taskId: string): Promise<void> {
   const last = getRounds(taskId).at(-1)!;
   addMessage(taskId, 'fryday', 'event', 'You asked the team to try again.');
   await startCoder(taskId, last.round + 1, last.feedback);
+}
+
+const expireOpenTickets = (taskId: string) =>
+  getDb().prepare(`UPDATE approvals SET state = 'expired', resolved_at = ? WHERE task_id = ? AND state = 'pending'`).run(Date.now(), taskId);
+
+/**
+ * The owner stops the task: agents are stopped, open questions for them are withdrawn, and a
+ * deploy being followed is let go of. Nothing is undone: what was committed stays on the branch,
+ * and a build already running in Jenkins is the owner's to stop there.
+ */
+export async function stopTask(taskId: string): Promise<void> {
+  if (!canStop(taskId)) throw new StoppedError(409, `${taskId} has nothing to stop right now`);
+  const note = 'You stopped the task. Nothing more runs until you send it back to the team.';
+  cancelPendingRetry(taskId);
+  stopFollowingTask(taskId, 'You stopped following the deploy. Nothing was cancelled in Jenkins.');
+  // The state goes first, so an agent that exits because it was stopped finds the task no
+  // longer in its stage and does not hand it over a second time.
+  const state = getTask(taskId)!.state;
+  if (state !== 'needs_owner' && canTransition(state, 'needs_owner')) setTaskState(taskId, 'needs_owner', note);
+  else if (state === 'queued') setTaskState(taskId, 'failed', note);
+  else setTaskNote(taskId, note);
+  expireOpenTickets(taskId);
+  const running = getDb().prepare(`SELECT id FROM runs WHERE task_id = ? AND state = 'running'`).all(taskId) as Array<{ id: string }>;
+  for (const r of running) killRun(r.id);
+  await stopTaskWork(taskId);
+  addMessage(taskId, 'fryday', 'event', note);
+  sseEmit({ type: 'task_updated', taskId });
+}
+
+/**
+ * The owner tried the work and it is not right: one more Builder round with what they wrote.
+ * Open tickets are withdrawn (they were for the commit that is about to change), and a deploy
+ * being followed is let go of. When the round passes, the usual approvals follow, including a
+ * new merge into staging when the earlier version was already there.
+ */
+export async function sendBackToBuilder(taskId: string, note: string): Promise<void> {
+  const said = note.trim();
+  if (!said) throw new StoppedError(400, 'Say what is wrong, so the Builder knows what to fix');
+  if (!canSendBack(taskId)) throw new StoppedError(409, `${taskId} cannot be sent back right now`);
+  stopFollowingTask(taskId, 'You sent the work back to be fixed, so FryDay stopped following this deploy. Nothing was cancelled in Jenkins.');
+  expireOpenTickets(taskId);
+  addMessage(taskId, 'owner', 'note', said);
+  const last = getRounds(taskId).at(-1)!;
+  await startCoder(taskId, last.round + 1, OWNER_REWORK_PROMPT);
 }
 
 /** The owner takes the change as it is: the task goes on to the approval a passed round gets. */

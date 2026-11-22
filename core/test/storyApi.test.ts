@@ -34,6 +34,8 @@ test('a task waiting for an answer: its story, journey and place in the overview
   assert.deepEqual(story.items.map((i) => `${i.from}:${i.kind}`), ['you:note', 'understander:question', 'you:note', 'fryday:said']);
   assert.equal(story.items[3]!.text, 'Got it. The team is waiting for your answer to the question above.');
   assert.deepEqual(story.choices, { tryAgain: false, accept: false, why: null });
+  assert.equal(story.canStop, true, 'a task waiting on an answer can be stopped');
+  assert.equal(story.canSendBack, false, 'nothing has been built to send back');
   assert.equal(story.items[1]!.action?.kind, 'answer');
   assert.equal(story.journey.stops.length, 6);
   assert.equal(story.now, null);
@@ -68,7 +70,7 @@ test('the routes: /overview is not taken for a task id, and a missing task is a 
     assert.equal(((await story.json()) as { task: { id: string } }).task.id, first.id);
     assert.equal((await fetch(`${base}/T-404/story`)).status, 404);
     // Trying again and accepting as it is are the owner's, at the UI (the session cookie), only.
-    for (const action of ['try-again', 'accept']) {
+    for (const action of ['try-again', 'accept', 'stop', 'send-back']) {
       const res = await fetch(`${base}/${first.id}/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
       assert.equal(res.status, 403, action);
     }
