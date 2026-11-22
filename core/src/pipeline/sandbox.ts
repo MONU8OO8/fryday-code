@@ -103,6 +103,10 @@ function srtCli(): string {
   return path.join(path.dirname(pkg), 'dist', 'cli.js');
 }
 
+function srtPkgDir(): string {
+  return path.dirname(require.resolve('@anthropic-ai/sandbox-runtime/package.json'));
+}
+
 function nodeInstallDir(): string {
   return path.dirname(path.dirname(fs.realpathSync(process.execPath)));
 }
@@ -113,7 +117,11 @@ export function sandboxSettings(workspacePath: string, tmpDir: string, extraRead
     filesystem: {
       // An absolute path: this runtime does not expand a bare "~/" (verified by test).
       denyRead: [os.homedir()],
-      allowRead: [workspacePath, tmpDir, nodeInstallDir(), ...extraReadPaths],
+      // The srt package directory must be readable so the apply-seccomp binary (vendor/seccomp/)
+      // is accessible from inside the bubblewrap sandbox on Linux. Without this, when the project
+      // lives under the home directory (e.g. on GitHub Actions where HOME=/home/runner), the
+      // denyRead on the home directory hides the binary and bwrap cannot execute it.
+      allowRead: [workspacePath, tmpDir, nodeInstallDir(), srtPkgDir(), ...extraReadPaths],
       allowWrite: [workspacePath, tmpDir],
       denyWrite: [],
     },

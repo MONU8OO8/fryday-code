@@ -203,6 +203,12 @@ test('the sandbox around Cursor holds: only its copy of the code and its own hom
   const canary = path.join(os.homedir(), `.fryday-cursor-canary-${randomBytes(6).toString('hex')}`);
   const outside = path.join(tmp, 'outside');
   fs.mkdirSync(outside, { recursive: true });
+  // Ensure ~/.cursor exists so the sandbox has an actual file to block (not just a missing path).
+  // On CI runners without Cursor installed the directory may be absent, which would produce ENOENT
+  // instead of EPERM and would not prove the sandbox is working.
+  const cursorDir = path.join(os.homedir(), '.cursor');
+  const createdCursorDir = !fs.existsSync(cursorDir);
+  if (createdCursorDir) fs.mkdirSync(cursorDir, { recursive: true });
   try {
     const checkout = path.join(inHome, 'checkout');
     fs.mkdirSync(checkout);
@@ -224,6 +230,7 @@ test('the sandbox around Cursor holds: only its copy of the code and its own hom
     assert.equal(fs.existsSync(path.join(checkout, 'cursor-was-here.txt')), false);
     assert.equal(fs.existsSync(path.join(outside, 'cursor-was-here.txt')), false);
   } finally {
+    if (createdCursorDir) fs.rmdirSync(cursorDir);
     fs.rmSync(inHome, { recursive: true, force: true });
     fs.rmSync(canary, { force: true });
   }
