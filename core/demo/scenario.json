@@ -1,0 +1,98 @@
+{
+  "task": {
+    "title": "Add a CSV export of orders",
+    "description": "Add a CSV export of orders: a toCsv(orders) function in src/export.js, with a test. Customer names can contain commas."
+  },
+  "analyst": [
+    {
+      "summary": "Add a CSV export of the shop's orders, as a toCsv(orders) function with a test.",
+      "requirements": ["src/export.js exports toCsv(orders), which returns the orders as CSV text.", "The first row names the columns.", "A customer name with a comma in it stays in one column.", "A test covers it."],
+      "areas": ["src/orders.js", "src/export.js", "test/export.test.js"],
+      "assumptions": ["The export is built in memory; the orders list is small."],
+      "risks": ["Names with commas or quotes break a naive CSV."],
+      "questions": [
+        {
+          "question": "Which columns should the CSV have?",
+          "why": "The task does not say, and it changes what the file holds.",
+          "options": ["Order id, customer, total and date", "Order id and total only"]
+        }
+      ],
+      "continueOn": "",
+      "continueWhy": ""
+    },
+    {
+      "summary": "Add a CSV export of the shop's orders with the columns id, customer, total and placedAt, as a toCsv(orders) function with a test.",
+      "requirements": ["src/export.js exports toCsv(orders), which returns the orders as CSV text.", "The columns are id, customer, total and placedAt, named in the first row.", "A customer name with a comma in it stays in one column.", "A test covers it."],
+      "areas": ["src/orders.js", "src/export.js", "test/export.test.js"],
+      "assumptions": ["The export is built in memory; the orders list is small."],
+      "risks": ["Names with commas or quotes break a naive CSV."],
+      "questions": [],
+      "continueOn": "",
+      "continueWhy": ""
+    }
+  ],
+  "planner": {
+    "summary": "Add toCsv(orders) in src/export.js, one row per order under a header row, and cover it with tests.",
+    "approach": "Write a small toCsv function next to the orders module, quote any value that holds a comma, a quote or a line break, and add node:test cases in test/export.test.js.",
+    "flow": [
+      { "step": "Call toCsv(listOrders())", "detail": "It returns a header row, then one row per order." },
+      { "step": "Download it from the orders page", "detail": "The page saves the text as orders.csv." }
+    ],
+    "files": ["src/export.js", "test/export.test.js"],
+    "criteria": ["The first row is id,customer,total,placedAt", "A name with a comma stays in one column", "The order totals are unchanged"],
+    "testPlan": ["npm test runs the orders and export tests and they pass"],
+    "risks": [],
+    "questions": []
+  },
+  "coder": [
+    {
+      "write": {
+        "src/export.js": "const COLUMNS = ['id', 'customer', 'total', 'placedAt'];\n\n/** The orders as CSV text: a header row, then one row per order. */\nexports.toCsv = (orders) =>\n  [COLUMNS.join(','), ...orders.map((o) => COLUMNS.map((c) => o[c]).join(','))].join('\\n') + '\\n';\n",
+        "test/export.test.js": "const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { toCsv } = require('../src/export');\nconst { listOrders } = require('../src/orders');\n\ntest('the first row names the columns', () => {\n  assert.equal(toCsv([]).split('\\n')[0], 'id,customer,total,placedAt');\n});\n\ntest('a name with a comma stays in one column', () => {\n  const rows = toCsv(listOrders()).trim().split('\\n');\n  assert.equal(rows[2], '1002,\"Hopper, Grace\",19.99,2026-11-03');\n});\n"
+      }
+    },
+    {
+      "write": {
+        "src/export.js": "const COLUMNS = ['id', 'customer', 'total', 'placedAt'];\n\n/** One CSV value: quoted when it holds a comma, a quote or a line break. */\nconst cell = (value) => {\n  const text = String(value ?? '');\n  return /[\",\\n]/.test(text) ? `\"${text.replace(/\"/g, '\"\"')}\"` : text;\n};\n\n/** The orders as CSV text: a header row, then one row per order. */\nexports.toCsv = (orders) =>\n  [COLUMNS, ...orders.map((o) => COLUMNS.map((c) => o[c]))].map((row) => row.map(cell).join(',')).join('\\n') + '\\n';\n"
+      }
+    }
+  ],
+  "tester": [
+    {
+      "verdict": "pass",
+      "summary": "toCsv is added and tested, names with commas are quoted, and the totals are unchanged.",
+      "criteria": [
+        { "criterion": "The first row is id,customer,total,placedAt", "met": true, "evidence": "The header test passes in npm test." },
+        { "criterion": "A name with a comma stays in one column", "met": true, "evidence": "\"Hopper, Grace\" is quoted; the comma test passes." },
+        { "criterion": "The order totals are unchanged", "met": true, "evidence": "src/orders.js is not changed and its test still passes." }
+      ],
+      "issues": []
+    }
+  ],
+  "usage": {
+    "analyst": [
+      { "input_tokens": 4180, "output_tokens": 3260, "cache_creation_input_tokens": 53410, "cache_read_input_tokens": 118200 },
+      { "input_tokens": 2950, "output_tokens": 2840, "cache_creation_input_tokens": 51870, "cache_read_input_tokens": 141500 }
+    ],
+    "planner": { "input_tokens": 6820, "output_tokens": 9440, "cache_creation_input_tokens": 74130, "cache_read_input_tokens": 212600 },
+    "coder": [
+      { "input_tokens": 14230, "output_tokens": 31870, "cache_creation_input_tokens": 203450, "cache_read_input_tokens": 1842000 },
+      { "input_tokens": 9120, "output_tokens": 18640, "cache_creation_input_tokens": 224880, "cache_read_input_tokens": 1311000 }
+    ],
+    "tester": { "input_tokens": 5310, "output_tokens": 8720, "cache_creation_input_tokens": 106380, "cache_read_input_tokens": 386400 }
+  },
+  "say": {
+    "analyst": [
+      "I read the task and the orders code. One thing changes what gets built: which columns go in the file.",
+      "Thanks. The export will have the order id, customer, total and date."
+    ],
+    "triage": "There is one project, sample-shop, and the task is about its orders.",
+    "planner": "Plan: a toCsv(orders) function in src/export.js, one row per order under a header row, and tests with a name that has a comma in it.",
+    "coder": [
+      "I added toCsv and two tests for it.",
+      "The test caught it: a name with a comma was split into two columns. I now quote such values, as CSV expects."
+    ],
+    "tester": "I read the change against the plan. All three points are met and the tests pass.",
+    "fryday": "This is the FryDay Code demo: the agents are stand-ins that follow a script, so I cannot answer questions here. Install FryDay Code with Claude Code to chat for real."
+  }
+}

@@ -1,0 +1,46 @@
+# FryDay Code in Docker, one command:
+#
+#   FRYDAY_PROJECTS=~/code docker compose up --build -d
+#   docker compose exec fryday npm --prefix /app/core run open -- --print
+#
+# Then open the printed link on this machine. See "Linux and Docker" in README.md.
+
+services:
+  fryday:
+    build: .
+    image: fryday-code:local
+    init: true
+    restart: unless-stopped
+    ports:
+      # This machine only. The host port must equal FRYDAY_PORT: core accepts requests only
+      # for 127.0.0.1:<port> and localhost:<port> (core/src/api/auth.ts allowedHosts).
+      - "127.0.0.1:${FRYDAY_PORT:-7475}:${FRYDAY_PORT:-7475}"
+    environment:
+      FRYDAY_PORT: ${FRYDAY_PORT:-7475}
+      # Agents sign in with an API key from your environment, or with a login made inside
+      # the container (docker compose exec fryday claude auth login), kept in claude-login.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # The author of the commits FryDay Code makes.
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+    volumes:
+      # Everything FryDay Code keeps: database, task worktrees, run logs, its secret.
+      - fryday-state:/home/node/.fryday-code
+      # The Claude Code login made inside the container.
+      - claude-login:/home/node/.claude
+      # Your repositories. Add them in FryDay Code as /home/node/projects/<name>.
+      # Keep every mount under /home/node: the sandboxes hide that folder from agents.
+      - ${FRYDAY_PROJECTS:?set FRYDAY_PROJECTS to the folder that holds your repositories}:/home/node/projects
+      # On a Linux host you can use your own Claude Code login instead of claude-login
+      # (macOS keeps it in the Keychain, so there use ANTHROPIC_API_KEY or log in inside):
+      # - ~/.claude:/home/node/.claude
+    security_opt:
+      # bubblewrap builds each sandbox in a user namespace, which Docker's default seccomp
+      # and AppArmor profiles forbid. These two lift that for this container only; the
+      # sandbox's own seccomp filter still applies to every agent command inside.
+      - seccomp=unconfined
+      - apparmor=unconfined
+
+volumes:
+  fryday-state:
+  claude-login:

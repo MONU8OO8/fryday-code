@@ -1,0 +1,75 @@
+{
+  "name": "fryday-code",
+  "version": "1.0.0",
+  "description": "A local team of AI agents that plans, builds, checks and releases changes to your own repositories, with your approval at every step that leaves the machine.",
+  "keywords": [
+    "ai",
+    "agents",
+    "multi-agent",
+    "claude",
+    "claude-code",
+    "developer-tools",
+    "code-review",
+    "automation",
+    "sandbox",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/fryday-code.git",
+    "directory": "core"
+  },
+  "homepage": "https://github.com/OWNER/fryday-code#readme",
+  "bugs": {
+    "url": "https://github.com/OWNER/fryday-code/issues"
+  },
+  "type": "commonjs",
+  "bin": {
+    "fryday-code": "bin/fryday-code.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "public/",
+    "demo/",
+    "tsconfig.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "redteam": "tsx scripts/redteam.ts",
+    "e2e": "tsx scripts/e2e-loop.ts",
+    "fresh": "tsx scripts/fresh-install.ts",
+    "intake": "tsx scripts/intake-check.ts",
+    "open": "tsx scripts/open.ts",
+    "redteam:verify": "tsx scripts/redteam-verify.ts",
+    "verify": "tsx scripts/verify-check.ts",
+    "deploy-check": "tsx scripts/deploy-check.ts",
+    "record-demo": "tsx scripts/record-demo.ts",
+    "demo": "node bin/fryday-code.mjs demo",
+    "doctor": "node bin/fryday-code.mjs doctor",
+    "prepack": "node -e \"for (const f of ['README.md', 'LICENSE']) { try { require('fs').copyFileSync('../' + f, f); } catch { console.warn('prepack: ../' + f + ' not found; the package goes without it'); } }\" && npm --prefix ../ui ci && npm --prefix ../ui run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.83",
+    "@playwright/mcp": "0.0.86",
+    "better-sqlite3": "^9.6.0",
+    "express": "^5.3.0",
+    "tsx": "^4.23.15",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

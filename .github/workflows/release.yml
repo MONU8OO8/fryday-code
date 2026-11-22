@@ -1,0 +1,98 @@
+# A version tag (v1.0.0, …): the Docker image to GitHub Container Registry, and the npm
+# package when an NPM_TOKEN secret is set (Settings → Secrets and variables → Actions).
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    name: Docker image to ghcr.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Image names must be lower case; metadata-action takes care of that.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # A pre-release tag (v1.1.0-rc.1) never becomes latest.
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  npm:
+    name: npm package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: No NPM_TOKEN secret, so nothing is published
+        if: env.NPM_TOKEN == ''
+        run: echo "Set an NPM_TOKEN secret to publish fryday-code to npm from a tag."
+
+      - uses: actions/checkout@v4
+        if: env.NPM_TOKEN != ''
+
+      - uses: actions/setup-node@v4
+        if: env.NPM_TOKEN != ''
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: |
+            core/package-lock.json
+            ui/package-lock.json
+
+      - name: The tag matches core/package.json
+        if: env.NPM_TOKEN != ''
+        run: |
+          version="$(node -p "require('./core/package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match core/package.json version $version." >&2
+            exit 1
+          fi
+
+      - name: README and LICENSE in the package
+        if: env.NPM_TOKEN != ''
+        run: cp README.md LICENSE core/
+
+      - name: Publish (prepack builds the UI into core/public)
+        if: env.NPM_TOKEN != ''
+        run: |
+          npm --prefix core ci
+          # A pre-release tag (v1.1.0-rc.1) goes to the "next" dist-tag, never "latest".
+          case "$GITHUB_REF_NAME" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          cd core && npm publish --access public --tag "$dist_tag"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,29 @@
+{
+  "name": "fryday-code",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FryDay Code — a local multi-agent software developer: plan, code, check, review, and release with your approval",
+  "scripts": {
+    "setup": "npm --prefix core install && npm --prefix ui install && npm --prefix ui run build",
+    "start": "npm --prefix core start",
+    "dev": "npm --prefix core run dev",
+    "open": "npm --prefix core run open",
+    "demo": "npm --prefix core run demo",
+    "doctor": "npm --prefix core run doctor",
+    "build:ui": "npm --prefix ui run build",
+    "build:demo": "npm --prefix ui run build:demo",
+    "record-demo": "npm --prefix core run record-demo",
+    "test": "npm --prefix core test",
+    "typecheck": "npm --prefix core run typecheck && npm --prefix ui run typecheck",
+    "redteam": "npm --prefix core run redteam",
+    "e2e": "npm --prefix core run e2e",
+    "fresh": "npm --prefix core run fresh",
+    "intake": "npm --prefix core run intake",
+    "redteam:verify": "npm --prefix core run redteam:verify",
+    "verify": "npm --prefix core run verify",
+    "deploy-check": "npm --prefix core run deploy-check"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

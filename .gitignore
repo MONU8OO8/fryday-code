@@ -1,0 +1,26 @@
+# Dependencies and build output
+node_modules/
+core/public/
+ui/dist-demo/
+# Copied from the repo root when the npm package is packed
+core/README.md
+core/LICENSE
+dist/
+*.tsbuildinfo
+
+# Local state never belongs in the repo (it lives in ~/.fryday-code)
+*.db
+*.db-wal
+*.db-shm
+*.log
+.env
+.env.*
+!.env.example
+
+# The developer's own editor / assistant context
+.cursor/
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+.superpowers/

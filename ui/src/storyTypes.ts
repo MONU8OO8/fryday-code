@@ -1,0 +1,66 @@
+/** The shapes of GET /api/tasks/overview and GET /api/tasks/:id/story (core/src/pipeline/story.ts). */
+
+export type Actor = 'understander' | 'planner' | 'builder' | 'checks' | 'checker' | 'app_tester' | 'page_tester' | 'releaser' | 'fryday' | 'you';
+export type StopId = 'understand' | 'plan' | 'build' | 'check' | 'approve' | 'live';
+export type StopState = 'idle' | 'active' | 'waiting' | 'done' | 'failed' | 'skipped';
+export type TaskGroup = 'needs_you' | 'working' | 'done';
+
+export interface Journey {
+  stops: Array<{ id: StopId; state: StopState }>;
+  current: StopId | null;
+  sendbacks: number;
+  /**
+   * live: deployed to staging by the project's deployer. on_staging: on staging, but the project has no
+   * deployer, so nothing was started. handed_over: shared for review, nothing on staging. stopped: the task failed.
+   */
+  finished: 'live' | 'on_staging' | 'handed_over' | 'stopped' | null;
+}
+
+export type DetailRef =
+  | { kind: 'brief' }
+  | { kind: 'plan' }
+  | { kind: 'round'; round: number; part: 'checks' | 'verdict' | 'changes' | 'verify' }
+  | { kind: 'deploy' }
+  | { kind: 'note' };
+
+export type StoryAction =
+  /** freeText: a written answer is accepted (a clarifying question); otherwise only an option. */
+  | { kind: 'answer'; questionId: string; options: Array<{ value: string; label: string }>; freeText: boolean }
+  | { kind: 'approve'; approvalId: string; plain: string; effects: string[] };
+
+export interface StoryItem {
+  id: string;
+  at: number;
+  from: Actor;
+  to: Actor | null;
+  kind: 'said' | 'handoff' | 'sendback' | 'question' | 'approval' | 'note' | 'outcome';
+  text: string;
+  round: number | null;
+  details: { label: string; ref: DetailRef } | null;
+  action: StoryAction | null;
+}
+
+export interface StoryNow { actor: Actor; text: string; since: number }
+
+export interface TaskStory {
+  task: { id: string; title: string; state: string; projectName: string | null; createdAt: number; budget: { limitTokens: number; usedTokens: number } };
+  journey: Journey;
+  items: StoryItem[];
+  now: StoryNow | null;
+  /** What the owner may ask for again: release → POST /api/tasks/:id/approval, deploy → POST /api/tasks/:id/deploy. */
+  askAgain: 'release' | 'deploy' | null;
+}
+
+export interface OverviewItem {
+  id: string;
+  title: string;
+  state: string;
+  group: TaskGroup;
+  line: string;
+  journey: Journey;
+  projectName: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** Counted tokens the task has used so far (input + output + cache writes). */
+  usedTokens: number;
+}

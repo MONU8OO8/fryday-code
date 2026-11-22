@@ -1,0 +1,24 @@
+# Built or installed inside the image
+**/node_modules
+core/public
+**/dist
+*.tsbuildinfo
+
+# Never in an image: local state, secrets, assistant and editor context
+.git
+.cursor
+.superpowers
+.claude
+**/.env
+**/.env.*
+!**/.env.example
+*.db
+*.db-wal
+*.db-shm
+*.log
+**/.DS_Store
+
+# Not needed to run
+Dockerfile
+docker-compose.yml
+.dockerignore

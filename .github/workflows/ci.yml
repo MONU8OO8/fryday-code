@@ -1,0 +1,139 @@
+# Every push and pull request: typecheck and tests on macOS and Linux, the UI and the demo
+# site build, and a Docker build with a smoke run.
+#
+# Real-agent checks (e2e, fresh, intake, redteam, redteam:verify, verify) need a Claude
+# account, so they are not run here; see CONTRIBUTING.md.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            core/package-lock.json
+            ui/package-lock.json
+
+      - name: Sandbox tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep lsof
+          # Ubuntu 24.04 and later restrict unprivileged user namespaces through AppArmor,
+          # and bubblewrap needs them (see "Linux and Docker" in README.md).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Sandbox tools (macOS)
+        if: runner.os == 'macOS'
+        run: command -v rg >/dev/null || brew install ripgrep
+
+      - name: Git author for the scratch repositories
+        run: |
+          git config --global user.name "FryDay CI"
+          git config --global user.email "ci@example.invalid"
+          git config --global init.defaultBranch main
+
+      # npm ci: exactly the lockfiles, never updated by the install.
+      - name: Install (core and UI) and build the UI
+        run: |
+          npm --prefix core ci
+          npm --prefix ui ci
+          npm run build:ui
+
+      - name: Typecheck (core and UI)
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+        env:
+          FRYDAY_DESKTOP_NOTIFY: 'off'
+          FRYDAY_MEMORY_WAIT_MS: '0'
+
+      - name: Build the UI
+        run: npm run build:ui
+
+      - name: The UI build holds no demo code
+        run: |
+          if grep -l "Stand-in agents replay a recorded task" core/public/assets/*.js; then
+            echo "The demo replay ended up in the real UI build." >&2
+            exit 1
+          fi
+
+      - name: Build the demo site
+        run: npm run build:demo
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t fryday-code:ci .
+
+      - name: Start it as docker-compose.yml does
+        run: |
+          mkdir -p "$RUNNER_TEMP/projects"
+          docker run -d --name fryday --init \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            -p 127.0.0.1:7475:7475 \
+            -e FRYDAY_PORT=7475 \
+            -v "$RUNNER_TEMP/projects:/home/node/projects" \
+            fryday-code:ci
+
+      - name: Wait for /health on the published port
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:7475/health; then echo; exit 0; fi
+            sleep 2
+          done
+          echo "FryDay Code did not answer on 127.0.0.1:7475." >&2
+          docker logs fryday >&2
+          exit 1
+
+      - name: Doctor in the container (report only; there is no Claude login in CI)
+        run: docker exec fryday node /app/core/bin/fryday-code.mjs doctor || true
+
+      - name: Demo with stand-in agents in the container
+        run: |
+          docker exec -d fryday sh -c 'node /app/core/bin/fryday-code.mjs demo --no-open > /tmp/demo.log 2>&1'
+          for i in $(seq 1 60); do
+            if docker exec fryday node -e "fetch('http://127.0.0.1:7477/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"; then
+              docker exec fryday sh -c 'sed "s/#launch=.*/#launch=<hidden>/" /tmp/demo.log'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "The demo did not start." >&2
+          docker exec fryday cat /tmp/demo.log >&2 || true
+          exit 1
+
+      - name: Stop
+        if: always()
+        run: |
+          docker logs fryday 2>&1 | sed "s/#launch=[^ ]*/#launch=<hidden>/" | tail -50 || true
+          docker rm -f fryday || true
