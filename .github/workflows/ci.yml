@@ -25,7 +25,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Linux needs far longer than macOS: bubblewrap costs seconds per sandboxed
+    # command where the macOS backend costs milliseconds, and the suite runs
+    # hundreds of them. macOS finishes in about three minutes either way.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 

@@ -6,7 +6,8 @@ import path from 'node:path';
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { runSandboxed } from '../src/pipeline/sandbox';
+import { runSandboxed, sandboxSettings } from '../src/pipeline/sandbox';
+import { SandboxRuntimeConfigSchema } from '@anthropic-ai/sandbox-runtime/dist/sandbox/sandbox-config.js';
 
 // The sandbox is an OS feature; these tests run for real on macOS (the platform Fryday runs on).
 // The sandbox runs on macOS and on Linux (bubblewrap); elsewhere there is none to test.
@@ -149,4 +150,24 @@ test('a deep scratch folder still works, and a command that could not start is r
 
 test('nothing is left behind in the scratch folder', { skip }, () => {
   assert.deepEqual(fs.readdirSync(scratch), []);
+});
+
+// The runtime's schema drops any key it does not know instead of complaining, so a setting
+// written in the wrong place is silently lost and the restriction it asks for never applies.
+// This reads the settings back through that schema and fails on anything it did not keep.
+test('every setting is in a place the sandbox runtime reads', () => {
+  const settings = sandboxSettings(workspace, scratch, [], ['example.invalid']);
+  const parsed = SandboxRuntimeConfigSchema.safeParse(settings);
+  assert.ok(parsed.success, `the runtime rejected the settings: ${JSON.stringify(parsed.error?.issues)}`);
+
+  const kept = parsed.data as Record<string, Record<string, unknown>>;
+  for (const [key, value] of Object.entries(settings)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const inner of Object.keys(value)) {
+        assert.notEqual(kept[key]?.[inner], undefined, `${key}.${inner} was dropped by the runtime's schema`);
+      }
+    } else {
+      assert.notEqual(kept[key], undefined, `${key} was dropped by the runtime's schema`);
+    }
+  }
 });

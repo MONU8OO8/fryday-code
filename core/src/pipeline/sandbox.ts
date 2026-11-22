@@ -112,8 +112,16 @@ function nodeInstallDir(): string {
 }
 
 export function sandboxSettings(workspacePath: string, tmpDir: string, extraReadPaths: string[] = [], allowedDomains: string[] = [], localNetwork = false): Record<string, unknown> {
+  // On Linux CI, apply-seccomp cannot create the nested user+PID namespace it installs the
+  // filter in, even with kernel.apparmor_restrict_unprivileged_userns=0, and every sandboxed
+  // command pays for the attempt. allowAllUnixSockets skips that layer; bwrap still enforces
+  // the filesystem and network restrictions, and outbound Unix sockets (all the layer adds)
+  // are not exercised by the test suite.
+  const linuxCi = process.platform === 'linux' && !!process.env['CI'];
   return {
-    network: { allowedDomains, deniedDomains: [], ...(localNetwork ? { allowLocalBinding: true } : {}) },
+    // allowAllUnixSockets belongs to the network section: the runtime reads it as
+    // network.allowAllUnixSockets, and a copy at the top level is dropped by its schema.
+    network: { allowedDomains, deniedDomains: [], ...(localNetwork ? { allowLocalBinding: true } : {}), ...(linuxCi ? { allowAllUnixSockets: true } : {}) },
     filesystem: {
       // An absolute path: this runtime does not expand a bare "~/" (verified by test).
       denyRead: [os.homedir()],
@@ -125,11 +133,12 @@ export function sandboxSettings(workspacePath: string, tmpDir: string, extraRead
       allowWrite: [workspacePath, tmpDir],
       denyWrite: [],
     },
-    // On Linux CI, apply-seccomp's nested user+PID namespace setup fails even with
-    // kernel.apparmor_restrict_unprivileged_userns=0. Skip the seccomp layer; bwrap
-    // still enforces all filesystem and network restrictions. Unix-socket blocking
-    // (the only thing the seccomp layer adds) is not tested by npm test.
-    ...(process.platform === 'linux' && process.env['CI'] ? { allowAllUnixSockets: true } : {}),
+    // Before every sandboxed command the runtime runs ripgrep over the working directory to
+    // find repositories whose hooks it must write-protect. At the default depth of 3 that
+    // walk costs seconds per command on a CI runner and the suite starts hundreds of them;
+    // 1 (the lowest the runtime accepts) still covers the workspace's own repository, which
+    // is the only one the tests create.
+    ...(linuxCi ? { mandatoryDenySearchDepth: 1 } : {}),
     // Docker only: see platform.ts.
     ...nestedSandbox(),
   };

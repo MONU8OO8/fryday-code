@@ -81,7 +81,7 @@ function freshRepo(withDeployer = true): void {
 }
 
 const note = (id: string) => JSON.parse(getTask(id)!.metadata_json ?? '{}').note as string;
-async function waitFor(what: string, cond: () => boolean, timeoutMs = process.env['CI'] ? 120_000 : 60_000) {
+async function waitFor(what: string, cond: () => boolean, timeoutMs = process.env['CI'] ? 300_000 : 60_000) {
   const start = Date.now();
   while (!cond()) {
     if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
