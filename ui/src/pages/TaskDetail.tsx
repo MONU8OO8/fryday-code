@@ -99,6 +99,23 @@ const OUTCOME_STYLE: Record<NonNullable<Round['outcome']>, { label: string; tone
 
 const SUB = 'mb-1 text-xs font-semibold text-hud-dim';
 
+/** A numbered step of the record: what this part is, in a few plain words. */
+function StepLabel({ n, title, hint }: { n: number; title: string; hint?: string }) {
+  return (
+    <div className="mb-1.5 mt-5 flex flex-wrap items-baseline gap-x-2">
+      <h2 className="text-sm font-semibold text-hud-bright"><span className="mr-1.5 text-hud-cyan">{n}</span>{title}</h2>
+      {hint && <span className="text-xs text-hud-dim">{hint}</span>}
+    </div>
+  );
+}
+
+/** A task's state in the words Home uses. */
+const PLAIN_STATE: Record<string, string> = {
+  queued: 'Waiting to start', intake: 'Understanding the task', waiting_owner: 'Has a question for you', workspace: 'Setting up',
+  planning: 'Planning', coding: 'Building', testing: 'Checking', verifying: 'Trying it out', awaiting_approval: 'Waiting for your OK',
+  releasing: 'Putting it on staging', deploying: 'Deploying staging', deployed: 'Live on staging', failed: 'Stopped', needs_owner: 'Stopped: needs you',
+};
+
 function PlanCard({ plan, verdict }: { plan: Plan; verdict: Verdict | null }) {
   // The tester answers the criteria in order; fall back to matching by text if the counts differ.
   const sameCount = verdict?.criteria.length === plan.criteria.length;
@@ -394,6 +411,9 @@ export default function TaskDetail() {
   const canAskAgain = !pending && lastRoundPassed && liveWorkspaces.length > 0 && (!release || release.state === 'stopped' || release.state === 'reverted')
     && ['awaiting_approval', 'needs_owner'].includes(task.state);
 
+  // The files of the workspace still in use; a discarded one's, when that is all there is.
+  const changedFiles = (liveWorkspaces[0] ?? workspaces[0])?.files ?? [];
+
   const stateTone: BadgeTone = task.state === 'deployed' ? 'ok' : task.state === 'failed' ? 'bad' : ['awaiting_approval', 'needs_owner', 'waiting_owner'].includes(task.state) ? 'warn' : 'accent';
   const pushLabel = pending && pending.action === 'push_branch' ? 'Push' : pending && (pending.action === 'deploy_stg' || pending.action === 'deploy_input') ? 'Deploy' : pending && pending.action !== 'release_stg' ? 'Your decision' : 'Release';
 
@@ -408,21 +428,9 @@ export default function TaskDetail() {
           <div className="mb-0.5 font-mono text-xs text-hud-dim">{task.id}</div>
           <h1 className="text-xl font-semibold leading-snug tracking-tight text-hud-bright">{task.title}</h1>
         </div>
-        <Badge tone={stateTone} dot className="mt-1">{task.state.replace('_', ' ')}</Badge>
+        <Badge tone={stateTone} dot className="mt-1">{PLAIN_STATE[task.state] ?? task.state.replace('_', ' ')}</Badge>
       </div>
-
-      {/* The agents: who has the task, how it got there, and the tokens each used */}
-      {flow && (
-        <Section title="Agents" card className="mb-3"
-          actions={<span className="text-xs text-hud-dim">{flow.current
-            ? `${flow.current.node === 'owner' ? 'Waiting for you' : `With the ${flow.nodes.find((n) => n.id === flow.current!.node)?.label}`} for ${fmtDuration(now - flow.current.since)}`
-            : task.state.replace('_', ' ')}</span>}>
-          <div className="-mx-1 overflow-x-auto px-1">
-            <AgentFlow flow={flow} selected={focus} onSelect={(n) => setPicked(n)} liveText={liveText} />
-          </div>
-          <AgentCrew flow={flow} runs={runs} selected={focus} onSelect={(n) => setPicked(n)} />
-        </Section>
-      )}
+      <p className="mb-2 text-sm text-hud-dim">The record of this task, in the order things happened. To talk to the team, use the chat on Home.</p>
 
       {note && (
         <div role="status" className={clsx('mb-3 rounded-xl border p-3 text-sm', task.state === 'failed' ? 'border-hud-red/40 text-hud-red' : task.state === 'deployed' ? 'border-hud-green/40 text-hud-green' : 'border-hud-amber/40 text-hud-amber')}>
@@ -437,6 +445,52 @@ export default function TaskDetail() {
         onSkip={() => void act(() => api.post(`/tasks/${id}/questions/skip`, {}))}
       />
 
+      <StepLabel n={1} title="What you asked" />
+      <Card padding="sm" className="mb-3 p-4 text-sm leading-relaxed text-hud-bright whitespace-pre-wrap">{task.description || task.title}</Card>
+
+      <StepLabel n={2} title="What the team understood" hint="The Understander's reading of your words, and anything it had to assume." />
+      <BriefCard brief={brief} attachments={attachments} />
+
+      <StepLabel n={3} title="The plan" hint="A tick is a point the Checker confirmed; a cross is one it did not." />
+      {plan && Array.isArray(plan.criteria) ? <PlanCard plan={plan} verdict={lastVerdict} /> : <p className="mb-3 text-sm text-hud-dim">No plan has been written yet.</p>}
+
+      {/* 4. What changed: the files, in words */}
+      <StepLabel n={4} title="What changed" hint="The files the Builder touched. Your own copy of the project is not touched until you approve." />
+      {changedFiles.length > 0 ? (
+        <Card padding="sm" className="mb-3 p-4 text-sm">
+          <ul className="space-y-1">
+            {changedFiles.map((f) => (
+              <li key={f.path} className="flex gap-2">
+                <span className={clsx('w-16 flex-shrink-0 text-xs', f.status.startsWith('A') ? 'text-hud-green' : f.status.startsWith('D') ? 'text-hud-red' : 'text-hud-amber')}>
+                  {f.status.startsWith('A') ? 'added' : f.status.startsWith('D') ? 'removed' : 'changed'}
+                </span>
+                <code className="break-all font-mono text-xs text-hud-bright">{f.path}</code>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : <p className="mb-3 text-sm text-hud-dim">Nothing has been changed yet.</p>}
+
+      {/* 5. How it was checked: the last round open, the earlier ones folded away */}
+      <StepLabel n={5} title="How it was checked" hint="Each round is one go by the Builder, then the project's own checks, then the Checker." />
+      {rounds.length > 0 ? (
+        <div className="mb-3 space-y-2">
+          <RoundCard round={rounds[rounds.length - 1]!} taskId={task.id} />
+          {rounds.length > 1 && (
+            <details>
+              <summary className="cursor-pointer rounded text-sm text-hud-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
+                Earlier rounds ({rounds.length - 1})
+              </summary>
+              <div className="mt-2 space-y-2">
+                {rounds.slice(0, -1).reverse().map((r) => <RoundCard key={r.round} round={r} taskId={task.id} />)}
+              </div>
+            </details>
+          )}
+        </div>
+      ) : <p className="mb-3 text-sm text-hud-dim">Nothing has been checked yet.</p>}
+
+      <StepLabel n={6} title="Putting it on staging" hint="Nothing is pushed, merged or deployed without your yes." />
+      {!pending && !release && !canAskAgain && !deploy && <p className="mb-3 text-sm text-hud-dim">Not asked for yet.</p>}
       {/* Release: the owner's yes, and what happened to it */}
       {(pending || release || canAskAgain) && (
         <Card padding="sm" className={clsx('mb-3 p-4', pending && 'border-hud-amber/60')}>
@@ -511,6 +565,25 @@ export default function TaskDetail() {
         </Button>
       )}
 
+      {/* Everything an engineer may want, out of the way of everyone else */}
+      <details className="mt-6 rounded-xl border border-hud-border">
+        <summary className="cursor-pointer rounded-xl px-4 py-3 text-sm font-semibold text-hud-bright focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
+          For engineers: agents, tokens, branch and the raw thread
+        </summary>
+        <div className="px-4 pb-4 pt-1">
+      {/* The agents: who has the task, how it got there, and the tokens each used */}
+      {flow && (
+        <Section title="Agents" card className="mb-3"
+          actions={<span className="text-xs text-hud-dim">{flow.current
+            ? `${flow.current.node === 'owner' ? 'Waiting for you' : `With the ${flow.nodes.find((n) => n.id === flow.current!.node)?.label}`} for ${fmtDuration(now - flow.current.since)}`
+            : task.state.replace('_', ' ')}</span>}>
+          <div className="-mx-1 overflow-x-auto px-1">
+            <AgentFlow flow={flow} selected={focus} onSelect={(n) => setPicked(n)} liveText={liveText} />
+          </div>
+          <AgentCrew flow={flow} runs={runs} selected={focus} onSelect={(n) => setPicked(n)} />
+        </Section>
+      )}
+
       {/* Workspaces */}
       {workspaces.length > 0 && (
         <Section title="Workspace" card className="mb-3"
@@ -551,19 +624,9 @@ export default function TaskDetail() {
         </Section>
       )}
 
-      <BriefCard brief={brief} attachments={attachments} />
-
-      {plan && Array.isArray(plan.criteria) && <PlanCard plan={plan} verdict={lastVerdict} />}
-
       <ThreadCard messages={thread} busy={busy} onSay={(body) => void act(() => api.post(`/tasks/${id}/messages`, { body }))} />
-
-      {rounds.length > 0 && (
-        <Section title={`Review rounds (${rounds.length})`} className="mb-3">
-          <div className="space-y-2">
-            {rounds.map((r) => <RoundCard key={r.round} round={r} taskId={task.id} />)}
-          </div>
-        </Section>
-      )}
+        </div>
+      </details>
     </div>
   );
 }

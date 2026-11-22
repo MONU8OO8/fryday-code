@@ -62,7 +62,8 @@ export function canSendBack(taskId: string): boolean {
   const task = getTask(taskId);
   if (!task || (task.state !== 'awaiting_approval' && task.state !== 'needs_owner')) return false;
   const db = getDb();
-  const running = db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running'`).get(taskId) as { n: number };
+  // The Lead answering the owner is not work on the change: it is how the work gets sent back.
+  const running = db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running' AND role != 'fryday'`).get(taskId) as { n: number };
   if (running.n > 0) return false;
   const releasing = db.prepare(`SELECT COUNT(*) AS n FROM releases WHERE task_id = ? AND state = 'running'`).get(taskId) as { n: number };
   if (releasing.n > 0) return false;

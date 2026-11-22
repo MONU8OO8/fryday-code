@@ -19,9 +19,11 @@ interface Props {
   answeredBelow?: string | null;
   onAnswer: (questionId: string, answer: string) => void;
   onDecide: (approvalId: string, decision: 'approved' | 'rejected') => void;
+  /** Start a task the Lead proposed in another project. */
+  onStartTask?: (messageId: number) => void;
 }
 
-export default function TeamChat({ taskId, items, now, busy, answeredBelow = null, onAnswer, onDecide }: Props) {
+export default function TeamChat({ taskId, items, now, busy, answeredBelow = null, onAnswer, onDecide, onStartTask }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const seen = useRef<Set<string> | null>(null);
   const stick = useRef(true);
@@ -37,13 +39,13 @@ export default function TeamChat({ taskId, items, now, busy, answeredBelow = nul
     <div ref={box} role="log" aria-live="polite" aria-label="Team chat" className="flex-1 min-h-0 overflow-y-auto space-y-2.5 pr-1"
       onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48; }}>
       {items.map((item) => (
-        <ChatItem key={item.id} taskId={taskId} item={item} fresh={fresh.has(item.id)} busy={busy} answeredBelow={answeredBelow} onAnswer={onAnswer} onDecide={onDecide} />
+        <ChatItem key={item.id} taskId={taskId} item={item} fresh={fresh.has(item.id)} busy={busy} answeredBelow={answeredBelow} onAnswer={onAnswer} onDecide={onDecide} onStartTask={onStartTask} />
       ))}
       {now && (
         <div className="flex gap-2 items-end chat-in">
           <Avatar actor={now.actor} />
           <div className="rounded-2xl rounded-bl-sm bg-hud-border/50 px-3 py-2 text-sm text-hud-dim">
-            {ACTORS[now.actor].name} is working <span className="typing ml-1"><span /><span /><span /></span>
+            {now.actor === 'fryday' ? 'FryDay is reading what you wrote' : `${ACTORS[now.actor].name} is working`} <span className="typing ml-1"><span /><span /><span /></span>
           </div>
         </div>
       )}
@@ -51,7 +53,7 @@ export default function TeamChat({ taskId, items, now, busy, answeredBelow = nul
   );
 }
 
-function ChatItem({ taskId, item, fresh, busy, answeredBelow, onAnswer, onDecide }: { taskId: string; item: StoryItem; fresh: boolean; busy: boolean } & Pick<Props, 'answeredBelow' | 'onAnswer' | 'onDecide'>) {
+function ChatItem({ taskId, item, fresh, busy, answeredBelow, onAnswer, onDecide, onStartTask }: { taskId: string; item: StoryItem; fresh: boolean; busy: boolean } & Pick<Props, 'answeredBelow' | 'onAnswer' | 'onDecide' | 'onStartTask'>) {
   const mine = item.from === 'you';
   const head = item.to && item.to !== 'you' ? `${ACTORS[item.from].name} → ${ACTORS[item.to].name}:` : `${ACTORS[item.from].name}:`;
   return (
@@ -60,6 +62,8 @@ function ChatItem({ taskId, item, fresh, busy, answeredBelow, onAnswer, onDecide
       <Avatar actor={item.from} decorative={!mine} />
       {item.action?.kind === 'approve' ? (
         <ApprovalCard item={item} action={item.action} busy={busy} onDecide={onDecide} />
+      ) : item.action?.kind === 'start_task' ? (
+        <ProposalCard action={item.action} busy={busy} onStartTask={onStartTask} />
       ) : item.action?.kind === 'answer' ? (
         <QuestionCard item={item} action={item.action} busy={busy} below={answeredBelow === item.action.questionId} onAnswer={onAnswer} />
       ) : (
@@ -82,6 +86,27 @@ function ChatItem({ taskId, item, fresh, busy, answeredBelow, onAnswer, onDecide
 function RichText({ text }: { text: string }) {
   const parts = text.split(/`([^`\n]+)`/);
   return <>{parts.map((p, i) => (i % 2 === 1 ? <code key={i} className="rounded bg-black/10 dark:bg-white/10 px-1 font-mono text-[0.85em]">{p}</code> : p))}</>;
+}
+
+/** A task the Lead proposes in another project. Nothing starts until the owner presses Start. */
+function ProposalCard({ action, busy, onStartTask }: { action: Extract<StoryItem['action'], { kind: 'start_task' }>; busy: boolean; onStartTask: Props['onStartTask'] }) {
+  return (
+    <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-hud-cyan/30 bg-hud-cyan/5 px-3.5 py-3 text-sm">
+      <div className="font-semibold mb-1">A task for {action.projectName}</div>
+      <p className="leading-relaxed"><RichText text={action.title} /></p>
+      <details className="mt-1.5 text-xs text-hud-dim">
+        <summary className="cursor-pointer text-hud-cyan">What the team there will be asked to do</summary>
+        <p className="mt-1 whitespace-pre-wrap leading-relaxed"><RichText text={action.description} /></p>
+      </details>
+      <div className="mt-2.5">
+        {action.startedTaskId ? (
+          <Link to={`/home/${action.startedTaskId}`} className="text-hud-cyan underline underline-offset-2">Started as {action.startedTaskId}. Open it →</Link>
+        ) : (
+          <Button size="sm" disabled={busy || !onStartTask} onClick={() => onStartTask?.(action.messageId)}>Start this task</Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ApprovalCard({ item, action, busy, onDecide }: { item: StoryItem; action: Extract<StoryItem['action'], { kind: 'approve' }>; busy: boolean; onDecide: Props['onDecide'] }) {

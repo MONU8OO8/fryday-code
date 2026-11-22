@@ -643,7 +643,7 @@ async function startCoder(taskId: string, round: number, feedback: string | null
 
   if (taskTokensLeft(taskId) <= 0) { askToContinue(taskId, { role: 'coder', round }, 'task'); return; }
   const continuing = feedback === CONTINUE_PROMPT;
-  enterState(taskId, 'coding', continuing ? `Round ${round}: continuing after the token limit` : feedback === RETRY_PROMPT ? `Round ${round}: trying again after the AI service was busy` : feedback === OWNER_REWORK_PROMPT ? `Round ${round}: fixing what you found` : round === 1 ? `Coding on ${ws.branch}` : `Round ${round}: fixing what the review found`);
+  enterState(taskId, 'coding', continuing ? `Round ${round}: continuing after the token limit` : feedback === RETRY_PROMPT ? `Round ${round}: trying again after the AI service was busy` : feedback?.startsWith(OWNER_REWORK_PROMPT) ? `Round ${round}: fixing what you found` : round === 1 ? `Coding on ${ws.branch}` : `Round ${round}: fixing what the review found`);
   await startTaskAgent(taskId, { role: 'coder', round }, {
     taskId,
     role: 'coder',
@@ -933,6 +933,19 @@ export async function sendBackToBuilder(taskId: string, note: string): Promise<v
   addMessage(taskId, 'owner', 'note', said);
   const last = getRounds(taskId).at(-1)!;
   await startCoder(taskId, last.round + 1, OWNER_REWORK_PROMPT);
+}
+
+/**
+ * The same, started by the Lead after reading what the owner wrote on the task. The owner's
+ * words are already on the thread (the Builder gets them as notes); `instructions` is what the
+ * Lead made of them, with the task's whole record in front of it.
+ */
+export async function sendBackFromLead(taskId: string, instructions: string): Promise<void> {
+  if (!canSendBack(taskId)) throw new StoppedError(409, `${taskId} cannot be sent back right now`);
+  stopFollowingTask(taskId, 'The work went back to be fixed, so FryDay stopped following this deploy. Nothing was cancelled in Jenkins.');
+  expireOpenTickets(taskId);
+  const last = getRounds(taskId).at(-1)!;
+  await startCoder(taskId, last.round + 1, `${OWNER_REWORK_PROMPT}\n\n## What the team lead understood from the owner\n\n${instructions.trim()}`);
 }
 
 /** The owner takes the change as it is: the task goes on to the approval a passed round gets. */

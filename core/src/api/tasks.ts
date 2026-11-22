@@ -38,6 +38,7 @@ import { QuestionError, answerQuestion, listQuestions, skipOpenQuestions } from 
 import { addMessage, listMessages } from '../pipeline/thread.js';
 import { parseBrief } from '../pipeline/brief.js';
 import { taskStory, tasksOverview } from '../pipeline/story.js';
+import { askLead, markNotesHandled, startProposal, LeadError } from '../pipeline/lead.js';
 
 export const tasksRouter = Router();
 
@@ -113,6 +114,7 @@ tasksRouter.post('/:id/try-again', (req, res) => {
   if (!stoppedChoices(id).tryAgain) { res.status(409).json({ error: 'This task is not waiting for you to try again' }); return; }
   const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
   if (note) addMessage(id, 'owner', 'note', note);
+  markNotesHandled(id);
   void tryAgainAfterStop(id).catch((err) => {
     console.error(`[fryday-core] trying ${id} again failed:`, err);
     setTaskNote(id, `Could not start again: ${err instanceof Error ? err.message : String(err)}`);
@@ -157,7 +159,7 @@ tasksRouter.post('/:id/send-back', (req, res) => {
   const id = req.params['id']!;
   if (!getTask(id)) { res.status(404).json({ error: 'Task not found' }); return; }
   const note = typeof req.body?.note === 'string' ? req.body.note : '';
-  stoppedReply(res, () => sendBackToBuilder(id, note));
+  stoppedReply(res, async () => { await sendBackToBuilder(id, note); markNotesHandled(id); });
 });
 
 // ─── POST /api/tasks/:id/release/revert ───────────────────────────────────────
@@ -234,7 +236,23 @@ tasksRouter.post('/:id/messages', (req, res) => {
   if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
   const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
   if (!body) { res.status(400).json({ error: 'The message is empty' }); return; }
-  res.status(201).json(addMessage(task.id, 'owner', 'note', body));
+  const message = addMessage(task.id, 'owner', 'note', body);
+  // The Lead reads it and answers in the chat; { lead: false } keeps it a plain note.
+  if (req.body?.lead !== false) askLead(task.id);
+  res.status(201).json(message);
+});
+
+// The owner starts a task the Lead proposed in another project. At the UI only.
+tasksRouter.post('/:id/proposals/:mid/start', (req, res) => {
+  if (res.locals['authVia'] !== 'cookie') { res.status(403).json({ error: 'Start a proposed task from the FryDay UI' }); return; }
+  const id = req.params['id']!;
+  if (!getTask(id)) { res.status(404).json({ error: 'Task not found' }); return; }
+  try {
+    res.status(201).json(startProposal(id, Number(req.params['mid'])));
+  } catch (err) {
+    if (!(err instanceof LeadError)) throw err;
+    res.status(err.status).json({ error: err.message });
+  }
 });
 
 function questionReply(res: express.Response, work: () => unknown): void {

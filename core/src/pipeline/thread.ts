@@ -13,8 +13,10 @@ export type Author = string;
  * question  a question to the owner
  * answer    the owner's answer
  * event     something that happened (a stage began, a check failed, a push was made)
+ * reply     the Lead's answer to what the owner wrote (pipeline/lead.ts)
+ * proposal  a task the Lead proposes in another project, as JSON; the owner starts it or not
  */
-export type MessageKind = 'note' | 'question' | 'answer' | 'event';
+export type MessageKind = 'note' | 'question' | 'answer' | 'event' | 'reply' | 'proposal';
 
 export interface TaskMessage {
   id: number;

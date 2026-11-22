@@ -38,7 +38,9 @@ import { initDb, getDb } from '../src/db/db';
 import { overrideRepo, saveProject } from '../src/registry/registry';
 import { activeRunIds, stopFollowing } from '../src/runner/supervisor';
 import { startTask, registerPipeline, StartError, stoppedChoices, tryAgainAfterStop, acceptAsItIs, StoppedError, stopTask, sendBackToBuilder, canSendBack, canStop } from '../src/pipeline/pipeline';
-import { addMessage } from '../src/pipeline/thread';
+import { addMessage, listMessages } from '../src/pipeline/thread';
+import { askLead, registerLead, startProposal, startedProposals, parseProposal, LeadError } from '../src/pipeline/lead';
+import { taskStory } from '../src/pipeline/story';
 import { getWorkspaces, discardWorkspaces, readGuidance } from '../src/pipeline/workspaces';
 import { getRounds } from '../src/pipeline/rounds';
 import { getTask, setTaskState } from '../src/pipeline/taskState';
@@ -84,7 +86,9 @@ const calls = (): Call[] =>
 
 let seq = 0;
 function addTask(title: string): string {
-  const id = `T-${++seq}`;
+  // A follow-up task the Lead proposed takes a number of its own, so count from the database.
+  seq = (getDb().prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM tasks').get() as { n: number }).n + 1;
+  const id = `T-${seq}`;
   getDb().prepare(`INSERT INTO tasks (id, seq, title, description, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', 0, 0)`)
     .run(id, seq, title, `${title} — details`);
   return id;
@@ -133,6 +137,7 @@ before(() => {
 
   initDb(process.env.FRYDAY_DB!);
   registerPipeline();
+  registerLead();
   saveProject({ id: REPO, name: 'Scratch repo', localPath: main, prodBranch: 'release', testCmd: 'node --test', verified: true });
   saveProject({ id: 'unverified', name: 'Not confirmed yet', localPath: main, prodBranch: 'release', verified: false });
 });
@@ -353,6 +358,104 @@ test('stopping a task while an agent is working stops the agent', { skip }, asyn
   await waitUntil('the coder to stop', () => activeRunIds().length === 0, 20_000);
   assert.equal(getTask(id)!.state, 'needs_owner', 'the coder exiting does not hand it over a second time');
   assert.match(note(id), /^You stopped the task/);
+});
+
+// ─── The Lead: FryDay answering the owner on a task ───────────────────────────
+// The owner wrote on a task that had been through review and nobody read it: a note is for
+// "the next agent to start", and after review none does. The Lead reads every message.
+
+const leadSays = (id: string) => listMessages(id).filter((m) => m.kind === 'reply').map((m) => m.body);
+const quiet = (id: string) => waitUntil('the agents to finish', () => activeRunIds().length === 0 && ['awaiting_approval', 'needs_owner', 'failed'].includes(getTask(id)!.state));
+/** The owner writes on the task, as POST /api/tasks/:id/messages does. */
+function ownerWrites(id: string, text: string): void {
+  addMessage(id, 'owner', 'note', text);
+  askLead(id);
+}
+
+test('the Lead answers what the owner writes, from the task\'s record', { skip }, async () => {
+  script({ coder: [good], tester: [pass], fryday: [{ reply: 'Yes: only src/math.js changed, and its test passes.', action: 'none', instructions: '', project: '', title: '' }] });
+  const id = addTask('Add mul, then ask about it');
+  assert.equal(await runToRest(id), 'awaiting_approval');
+  ownerWrites(id, 'are you sure only one file changed?');
+  await waitUntil('the answer', () => leadSays(id).length === 1);
+  assert.deepEqual(leadSays(id), ['Yes: only src/math.js changed, and its test passes.']);
+  assert.equal(getTask(id)!.state, 'awaiting_approval', 'an answer changes nothing else');
+
+  const lead = calls().filter((c) => c.role === 'fryday').at(-1)!;
+  assert.match(lead.prompt, /## What the owner just wrote\n\nare you sure only one file changed\?/);
+  assert.match(lead.prompt, /Can send back to the Builder: yes/);
+  assert.match(lead.prompt, /## The plan[\s\S]*mul\(2, 3\) returns 6/, 'the plan is in front of it');
+  assert.match(lead.prompt, /### Round 1 \(passed\)/);
+  assert.deepEqual(lead.argv.filter((a) => a === '--json-schema').length, 1, 'it answers in a fixed shape');
+
+  // The chat shows its own words under the owner's, not a fixed line.
+  const items = taskStory(id)!.items;
+  const at = items.findIndex((i) => i.text === 'are you sure only one file changed?');
+  assert.equal(items.slice(at).some((i) => i.id.startsWith('reply:') && i.text.startsWith('Yes: only src/math.js')), true);
+  assert.equal(items.some((i) => i.id.startsWith('ack:')), false, 'no canned reply beside the real one');
+  await quiet(id);
+});
+
+test('the Lead sends the work back to the Builder when the owner asks for a change', { skip }, async () => {
+  script({
+    coder: [good], tester: [pass],
+    fryday: [{ reply: 'You are right, negatives were missed. I am sending this back to the Builder now.', action: 'send_back', instructions: 'Make mul handle negative factors and add a test for mul(2, -3).', project: '', title: '' }],
+  });
+  const id = addTask('Add mul, then ask for a fix in words');
+  assert.equal(await runToRest(id), 'awaiting_approval');
+  ownerWrites(id, 'it does not work for negative numbers, fix it');
+  await waitUntil('the Builder to be started again', () => calls().filter((c) => c.role === 'coder').length === 2);
+  await quiet(id);
+  assert.deepEqual(outcomes(id), ['passed', 'passed']);
+  const builder = calls().filter((c) => c.role === 'coder').at(-1)!;
+  assert.match(builder.prompt, /## What the team lead understood from the owner\n\nMake mul handle negative factors/);
+  assert.match(builder.prompt, /it does not work for negative numbers, fix it/, 'and the owner\'s own words');
+  assert.deepEqual(leadSays(id), ['You are right, negatives were missed. I am sending this back to the Builder now.']);
+});
+
+test('the Lead proposes a task in another project, and the owner starts it with one press', { skip }, async () => {
+  saveProject({ id: 'the-backend', name: 'The backend', localPath: main, prodBranch: 'release', testCmd: 'node --test', verified: true });
+  const proposal = { reply: 'The page is done; the server must filter too. I have put a task for The backend below; press Start.', action: 'new_task', instructions: 'Make GET /users accept a search parameter and filter by it.', project: 'the-backend', title: 'Filter users by search' };
+  script({ coder: [good], tester: [pass], fryday: [proposal, { ...proposal, project: 'not-a-project' }] });
+  const id = addTask('Add mul, then need the backend');
+  assert.equal(await runToRest(id), 'awaiting_approval');
+  ownerWrites(id, 'I think the backend has to change too');
+  await waitUntil('the proposal', () => listMessages(id).some((m) => m.kind === 'proposal'));
+  const message = listMessages(id).find((m) => m.kind === 'proposal')!;
+  assert.deepEqual(parseProposal(message.body), { projectId: 'the-backend', title: 'Filter users by search', description: 'Make GET /users accept a search parameter and filter by it.' });
+  assert.equal(getTask(id)!.state, 'awaiting_approval', 'nothing starts until the owner says so');
+  const card = taskStory(id)!.items.find((i) => i.action?.kind === 'start_task')!;
+  assert.deepEqual([card.action!.kind === 'start_task' && card.action.projectName, card.action!.kind === 'start_task' && card.action.startedTaskId], ['The backend', null]);
+  assert.match(calls().filter((c) => c.role === 'fryday').at(-1)!.prompt, /- the-backend: The backend/, 'the projects it may propose are listed for it');
+  await quiet(id);
+
+  const { id: follow } = startProposal(id, message.id);
+  assert.equal(getTask(follow)!.title, 'Filter users by search');
+  assert.match(getTask(follow)!.description, new RegExp(`^Make GET /users accept a search parameter[\\s\\S]*Follow-up to ${id}:`));
+  assert.deepEqual(startedProposals(id), { [String(message.id)]: follow });
+  assert.throws(() => startProposal(id, message.id), LeadError, 'not started twice');
+  assert.throws(() => startProposal(id, 999_999), LeadError);
+  await waitUntil('the follow-up task to run', () => ['awaiting_approval', 'needs_owner', 'failed'].includes(getTask(follow)!.state) && activeRunIds().length === 0);
+  assert.equal(getTask(follow)!.state, 'awaiting_approval', 'the new task went through the team in the other project');
+
+  // A project that is not set up here is not proposed: the Lead's answer says why.
+  ownerWrites(id, 'and the other service?');
+  await waitUntil('the second answer', () => leadSays(id).length === 2);
+  assert.match(leadSays(id)[1]!, /"not-a-project" is not a project set up here/);
+  assert.equal(listMessages(id).filter((m) => m.kind === 'proposal').length, 1);
+  await quiet(id);
+});
+
+test('when the Lead cannot answer, the owner is told, and their message is kept', { skip }, async () => {
+  script({ coder: [good], tester: [pass] }); // no answer scripted: the run ends without one
+  const id = addTask('Add mul, then the Lead fails');
+  assert.equal(await runToRest(id), 'awaiting_approval');
+  ownerWrites(id, 'hello?');
+  await waitUntil('the apology', () => leadSays(id).length === 1);
+  assert.match(leadSays(id)[0]!, /^I could not answer just now/);
+  assert.equal(listMessages(id).filter((m) => m.author === 'owner' && m.kind === 'note').length, 1);
+  assert.equal(askLead(id), false, 'and it does not ask itself again without a new message');
+  await quiet(id);
 });
 
 test('a check that already failed before the task does not block it', { skip }, async () => {

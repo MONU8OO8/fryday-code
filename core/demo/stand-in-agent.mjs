@@ -6,6 +6,7 @@
 // Scripted mode (pipeline tests): FAKE_PLAN_FILE points at a JSON script
 //   { planner: <plan>, coder: [{ write: {path: content}, delete: [path], budget: true }, ...], tester: [<verdict>, ...],
 //     analyst: [<brief>, ...], triage: [<triage>, ...] }
+//     fryday: [<the Lead's answer>, ...] }   (the Lead on a task; without it the run gives no structured answer)
 // The Analyst is one role doing two jobs; which one is told from the JSON schema it was given.
 // Without a script entry it answers with a clear brief (no questions, no branch) or an unsure triage.
 // A coder step with `budget: true` does its writes and then stops at the CLI's own money cap
@@ -152,6 +153,9 @@ if (planFile && existsSync(planFile)) {
     structured = script.planner;
   } else if (role === 'tester') {
     structured = pick(script.tester);
+  } else if (role === 'fryday') {
+    // The Lead answering the owner on a task: { reply, action, instructions, project, title }.
+    structured = pick(script.fryday);
   }
 } else if (role === 'coder') {
   // Unscripted: a coder "implements" its task by adding one file to its working directory.

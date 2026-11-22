@@ -18,6 +18,7 @@ import { loadConfig } from './config.js';
 import { initDb } from './db/db.js';
 import { reconcileRunsOnStartup } from './runner/supervisor.js';
 import { registerPipeline, recoverInterruptedTasks } from './pipeline/pipeline.js';
+import { registerLead } from './pipeline/lead.js';
 import { reconcileReleasesOnStartup } from './pipeline/releaseFlow.js';
 import { registerDeploy, reconcileDeploysOnStartup } from './deploy/deployFlow.js';
 import { sseHandler } from './api/events.js';
@@ -46,6 +47,7 @@ const seeded = importSeedIfEmpty(cfg.seedPath);
 if (seeded > 0) console.log(`[fryday-core] Imported ${seeded} project${seeded === 1 ? '' : 's'} from ${cfg.seedPath}`);
 const launchCodes = new LaunchCodes();
 registerPipeline(); // before runs are picked up again, so their endings are handled
+registerLead(); // the Lead's answers are handled the same way
 registerOwnerNotifications();
 registerDeploy();
 reconcileRunsOnStartup();

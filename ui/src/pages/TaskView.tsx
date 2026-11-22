@@ -52,11 +52,6 @@ export default function TaskView({ id }: { id: string }) {
     if (!window.confirm('Stop this task? Agents stop and open questions are withdrawn. Nothing already done is undone, and a build already running in Jenkins keeps running there.')) return;
     void act(() => api.post(`/tasks/${encodeURIComponent(id)}/stop`, {}));
   };
-  const sendBack = () => {
-    const note = reply.trim();
-    if (!note) return;
-    void act(async () => { await api.post(`/tasks/${encodeURIComponent(id)}/send-back`, { note }); setReply(''); });
-  };
 
   if (!story) {
     return (
@@ -110,7 +105,8 @@ export default function TaskView({ id }: { id: string }) {
       )}
       <TeamChat key={id} taskId={id} items={story.items} now={now} busy={busy} answeredBelow={openQuestion?.freeText ? openQuestion.questionId : null}
         onAnswer={(qid, answer) => void act(() => api.post(`/tasks/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`, { answer }))}
-        onDecide={(aid, decision) => void act(() => api.post(`/approvals/${encodeURIComponent(aid)}/resolve`, { decision }))} />
+        onDecide={(aid, decision) => void act(() => api.post(`/approvals/${encodeURIComponent(aid)}/resolve`, { decision }))}
+        onStartTask={(mid) => void act(() => api.post(`/tasks/${encodeURIComponent(id)}/proposals/${mid}/start`, {}))} />
       {error && <p role="alert" className="text-sm text-hud-red mt-2">{error}</p>}
       {askAgain && !now && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-hud-amber/40 bg-hud-amber/10 px-3.5 py-2.5 mt-3 text-sm">
@@ -140,32 +136,16 @@ export default function TaskView({ id }: { id: string }) {
           {story.discarded ? <>This task's work was discarded. <Link to="/home" className="text-hud-cyan underline">Start a new task</Link> to try again.</> : 'This task is finished.'}
         </p>
       ) : (
-      story.canSendBack && !openQuestion ? (
-        // The work has been through review and nothing runs: what the owner writes is either
-        // something to fix (it goes to the Builder now) or just a note on the task.
-        <form onSubmit={(e) => { e.preventDefault(); sendBack(); }} className="mt-4 pt-4 border-t border-hud-border">
-          <div className="flex gap-2">
-            <input value={reply} onChange={(e) => setReply(e.target.value)} aria-label="What is wrong"
-              placeholder="What is wrong? For example: “the search box shows no results”"
-              className={clsx(controlClass(), 'flex-1 min-w-0')} />
-            <Button type="submit" disabled={busy || !reply.trim()}>Send back to fix</Button>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
-            <span className="text-xs text-hud-dim">The Builder gets one more round with your words, then the checks and the Checker run again.</span>
-            <button type="button" className="text-xs text-hud-cyan hover:underline disabled:opacity-50" disabled={busy || !reply.trim()} onClick={(e) => send(e as unknown as FormEvent)}>
-              Just save it as a note
-            </button>
-          </div>
-        </form>
-      ) : (
-      <form onSubmit={send} className="flex gap-2 mt-4 pt-4 border-t border-hud-border">
-        <input value={reply} onChange={(e) => setReply(e.target.value)}
-          placeholder={openQuestion?.freeText ? 'Type your answer to the question above…' : 'Tell the team something (they read it when they next start)…'}
-          aria-label={openQuestion?.freeText ? 'Your answer' : 'Message to the team'}
-          className={clsx(controlClass(), 'flex-1 min-w-0')} />
-        <Button type="submit" disabled={busy || !reply.trim()}>{openQuestion?.freeText ? 'Answer' : 'Send'}</Button>
+      <form onSubmit={send} className="mt-4 pt-4 border-t border-hud-border">
+        <div className="flex gap-2">
+          <input value={reply} onChange={(e) => setReply(e.target.value)}
+            placeholder={openQuestion?.freeText ? 'Type your answer to the question above…' : 'Ask the team anything, or tell them what to change…'}
+            aria-label={openQuestion?.freeText ? 'Your answer' : 'Message to the team'}
+            className={clsx(controlClass(), 'flex-1 min-w-0')} />
+          <Button type="submit" disabled={busy || !reply.trim()}>{openQuestion?.freeText ? 'Answer' : 'Send'}</Button>
+        </div>
+        {!openQuestion && <p className="mt-1.5 text-xs text-hud-dim">FryDay reads it and answers here. If you ask for a change, it sends the work back to the Builder{story.canSendBack ? '' : ' once nothing else is running'}.</p>}
       </form>
-      )
       )}
     </div>
   );

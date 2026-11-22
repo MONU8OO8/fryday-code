@@ -26,7 +26,9 @@ export type DetailRef =
 export type StoryAction =
   /** freeText: a written answer is accepted (a clarifying question); otherwise only an option. */
   | { kind: 'answer'; questionId: string; options: Array<{ value: string; label: string }>; freeText: boolean }
-  | { kind: 'approve'; approvalId: string; plain: string; effects: string[] };
+  | { kind: 'approve'; approvalId: string; plain: string; effects: string[] }
+  /** A task the Lead proposes in another project: POST /api/tasks/:id/proposals/:messageId/start. */
+  | { kind: 'start_task'; messageId: number; projectName: string; title: string; description: string; startedTaskId: string | null };
 
 export interface StoryItem {
   id: string;

@@ -20,6 +20,7 @@ import { listMessages } from './thread.js';
 import { getWorkspaces } from './workspaces.js';
 import { loadJenkinsCredentials } from '../deploy/config.js';
 import { stoppedChoices, canStop, canSendBack, type StoppedChoices } from './stopped.js';
+import { parseProposal, startedProposals } from './lead.js';
 import type { QuestionOption } from './questions.js';
 import type { Round } from './rounds.js';
 import { ACTOR_NAME, actorOfRole, capital, checkName, clip, doingText, formatTokens, joinWords, plainText, times, type Actor } from './plainWords.js';
@@ -37,7 +38,9 @@ export type DetailRef =
 export type StoryAction =
   /** freeText: the owner may write an answer (a clarifying question); otherwise only an option counts. */
   | { kind: 'answer'; questionId: string; options: QuestionOption[]; freeText: boolean }
-  | { kind: 'approve'; approvalId: string; plain: string; effects: string[] };
+  | { kind: 'approve'; approvalId: string; plain: string; effects: string[] }
+  /** A task the Lead proposes in another project. startedTaskId: it was started as that task. */
+  | { kind: 'start_task'; messageId: number; projectName: string; title: string; description: string; startedTaskId: string | null };
 
 export interface StoryItem {
   /** Stable between calls, so the UI animates only new items. */
@@ -59,7 +62,8 @@ export interface StoryNow {
 }
 
 export interface StoryInput {
-  task: { id: string; title: string; description: string; state: string; createdAt: number; note: string | null };
+  /** restedAt: when the task came to rest; a closing line belongs there, above what was said after. */
+  task: { id: string; title: string; description: string; state: string; createdAt: number; note: string | null; restedAt?: number };
   projectName: string | null;
   brief: { summary: string; at: number } | null;
   plan: { summary: string; criteria: number; at: number } | null;
@@ -84,6 +88,12 @@ export interface StoryInput {
   builderSaid?: Record<number, string>;
   /** The work can be sent back to the Builder with what the owner found (canSendBack). */
   canSendBack?: boolean;
+  /** What the Lead answered the owner (pipeline/lead.ts), oldest first. */
+  replies?: Array<{ id: number; body: string; at: number }>;
+  /** Tasks the Lead proposed in other projects. */
+  proposals?: Array<{ id: number; at: number; projectName: string; title: string; description: string; startedTaskId: string | null }>;
+  /** The Lead is reading what the owner wrote right now. */
+  leadBusy?: boolean;
 }
 
 /** The stored facts an ending is read from. Approvals in any order. */
@@ -179,7 +189,7 @@ const endSentence = (text: string) => (!text || /[.!?…]$/.test(text) ? text : 
 /** FryDay's reply to a note of the owner's that no agent has read yet: what happens with it now. */
 function ackWhileWaiting(state: string, pendingApproval: boolean, choices: StoppedChoices | undefined, sendBack: boolean): string {
   if (choices?.tryAgain) return 'Got it. Press “Try again” below and the Builder starts on it.';
-  if (sendBack) return 'Saved as a note, so nobody is working on it yet. To have the Builder fix it, write it again and press “Send back to fix”.';
+  if (sendBack) return 'Saved as a note, so nobody is working on it yet. Write to the team below and FryDay reads it and acts on it.';
   if (pendingApproval) return 'Got it. To go on, press Approve (or Not yet) on the card above. A message does not approve anything.';
   if (state === 'waiting_owner') return 'Got it. The team is waiting for your answer to the question above.';
   if (state === 'needs_owner' || state === 'deployed' || state === 'failed') return 'Saved on the task. Nothing is running right now, so nobody reads it until the task goes on.';
@@ -322,24 +332,46 @@ export function buildStory(input: StoryInput): StoryItem[] {
     add({ id: `accepted:${r.round}`, at: r.createdAt + 4, from: 'you', kind: 'note', round: r.round, text: 'Accept it as it is.' });
   }
 
+  // The Lead's own words, where it answered; the fixed lines below are for notes it never read
+  // (written before there was a Lead, or sent as a plain note).
+  for (const r of input.replies ?? []) add({ id: `reply:${r.id}`, at: r.at, from: 'fryday', to: 'you', kind: 'said', text: clip(r.body, 900) });
+  for (const p of input.proposals ?? []) {
+    add({
+      id: `proposal:${p.id}`, at: p.at, from: 'fryday', to: 'you', kind: 'said', text: `A task for ${p.projectName}: ${clip(p.title, 200)}`,
+      action: { kind: 'start_task', messageId: p.id, projectName: p.projectName, title: p.title, description: p.description, startedTaskId: p.startedTaskId },
+    });
+  }
+  const lastReply = (input.replies ?? []).at(-1)?.id ?? 0;
+  const lastNote = input.notes.at(-1)?.id ?? 0;
+
   const pendingNow = input.approvals.some((a) => a.state === 'pending');
   for (const n of input.notes) {
+    if (n.id < lastReply) continue; // the Lead answered after it
+    if (input.leadBusy && n.id === lastNote) continue; // being read right now
     const reader = input.runStarts?.find((r) => r.at > n.at);
     add({ id: `ack:${n.id}`, at: n.at, from: 'fryday', to: 'you', kind: 'said', text: reader ? `Got it. I passed it on to the ${ACTOR_NAME[actorOfRole(reader.role)]}.` : ackWhileWaiting(t.state, pendingNow, input.choices, input.canSendBack === true) });
   }
 
   let pending = false;
-  for (const a of input.approvals) {
-    if (a.state === 'expired') continue; // replaced by a newer one before anyone decided
+  const asked = input.approvals.filter((a) => a.state !== 'expired'); // an expired one was replaced before anyone decided
+  for (let i = 0; i < asked.length; i++) {
+    const a = asked[i]!;
     const open = a.state === 'pending';
     pending ||= open;
     const plain = plainApproval(a.action, a.payload, input.projectName);
+    // The same question answered the same way several times in a row (a deploy tried again and
+    // again) is said once, with how often, so the chat does not fill with one sentence.
+    const same = (b: typeof a | undefined) => !!b && b.state !== 'pending' && b.action === a.action && b.state === a.state && plainApproval(b.action, b.payload, input.projectName) === plain;
+    if (!open && same(asked[i + 1])) continue;
+    let times = 1;
+    for (let j = i - 1; !open && j >= 0 && same(asked[j]); j--) times++;
     add({
       id: `approval:${a.id}`, at: a.requestedAt, from: a.action === 'continue_budget' ? 'fryday' : 'releaser', to: 'you', kind: 'approval', text: plain,
       action: open ? { kind: 'approve', approvalId: a.id, plain, effects: [...strings(a.payload['pushes']), ...strings(a.payload['effects'])] } : null,
     });
     if (a.resolvedAt !== null && a.state !== 'pending') {
-      add({ id: `decision:${a.id}`, at: a.resolvedAt, from: 'you', kind: 'note', text: a.state === 'rejected' ? 'Not yet.' : 'Approved.' });
+      const said = a.state === 'rejected' ? 'Not yet.' : 'Approved.';
+      add({ id: `decision:${a.id}`, at: a.resolvedAt, from: 'you', kind: 'note', text: times > 1 ? `${said} (${times} times)` : said });
     }
   }
 
@@ -359,7 +391,12 @@ export function buildStory(input: StoryInput): StoryItem[] {
     if (text) add({ id: `deploy:${d.id}`, at: d.at + 1, from: 'releaser', kind: 'outcome', text, details: { label: 'Deploy details', ref: { kind: 'deploy' } } });
   }
 
-  const last = items.reduce((m, i) => Math.max(m, i.at), 0);
+  // The closing line stands where the task came to rest, so what the owner and the Lead said
+  // afterwards reads below it; without that time, after everything.
+  const talk = /^(note|ack|reply|proposal):/;
+  const last = t.restedAt === undefined
+    ? items.reduce((m, i) => Math.max(m, i.at), 0)
+    : Math.max(t.restedAt - 1, items.filter((i) => !talk.test(i.id)).reduce((m, i) => Math.max(m, i.at), 0));
   const whatHappened = { label: 'What happened', ref: { kind: 'note' as const } };
   if (t.state === 'needs_owner' && !pending) {
     const latest = input.approvals.filter((a) => a.state !== 'expired').sort((a, b) => a.requestedAt - b.requestedAt).at(-1);
@@ -527,6 +564,7 @@ export function taskStory(taskId: string): TaskStory | null {
   const workspaces = getWorkspaces(taskId);
   const discarded = workspaces.length > 0 && workspaces.every((w) => w.removed_at !== null);
   const sendBack = canSendBack(taskId);
+  const started = startedProposals(taskId);
   // The Builder's own report for each round: its last finished run in that round.
   const builderSaid: Record<number, string> = {};
   for (const r of db.prepare(`SELECT round, result_text FROM runs WHERE task_id = ? AND role = 'coder' AND state = 'completed' AND result_text IS NOT NULL ORDER BY started_at`).all(taskId) as Array<{ round: number; result_text: string }>) {
@@ -534,7 +572,9 @@ export function taskStory(taskId: string): TaskStory | null {
   }
 
   const items = buildStory({
-    task: { id: task.id, title: task.title, description: task.description, state: task.state, createdAt: task.created_at, note: typeof note === 'string' ? note : null },
+    task: { id: task.id, title: task.title, description: task.description, state: task.state, createdAt: task.created_at, note: typeof note === 'string' ? note : null,
+      // When core last said something happened on the task: that is when it came to rest.
+      restedAt: messages.filter((m) => m.kind === 'event' && m.author === 'fryday').at(-1)?.created_at },
     projectName,
     brief: brief ? { summary: brief.summary, at: endedAt('analyst') } : null,
     plan: plan ? { summary: plan.summary, criteria: plan.criteria.length, at: endedAt('planner') } : null,
@@ -546,16 +586,26 @@ export function taskStory(taskId: string): TaskStory | null {
     release: release ? { id: release.id, state: release.state, at: release.started_at } : null,
     deploy: deploy ? { id: deploy.id, state: deploy.state, at: deploy.started_at } : null,
     outcome,
-    runStarts: runs.map((r) => ({ role: r.role, at: r.started_at })),
+    runStarts: runs.filter((r) => r.role !== 'fryday').map((r) => ({ role: r.role, at: r.started_at })),
     choices,
     discarded,
     builderSaid,
     canSendBack: sendBack,
+    replies: messages.filter((m) => m.kind === 'reply').map((m) => ({ id: m.id, body: m.body, at: m.created_at })),
+    proposals: messages.filter((m) => m.kind === 'proposal').flatMap((m) => {
+      const p = parseProposal(m.body);
+      return p ? [{ id: m.id, at: m.created_at, projectName: getRepo(p.projectId)?.name ?? p.projectId, title: p.title, description: p.description, startedTaskId: started[String(m.id)] ?? null }] : [];
+    }),
+    leadBusy: runs.some((r) => r.role === 'fryday' && r.state === 'running'),
   });
 
-  const live = runs.filter((r) => r.state === 'running').at(-1);
-  const step = live ? recentActivity(live.log_path, 5).filter((s): s is Step => s.kind === 'assistant').at(-1) : undefined;
-  const now = live ? storyNow({ role: live.role, tools: step?.tools ?? [], toolInputs: step?.toolInputs ?? [], text: step?.text ?? '', since: live.started_at }) : null;
+  // An agent working on the change comes first; the Lead reading a message shows when nothing else runs.
+  const working = runs.filter((r) => r.state === 'running');
+  const live = working.filter((r) => r.role !== 'fryday').at(-1) ?? working.at(-1);
+  const step = live && live.role !== 'fryday' ? recentActivity(live.log_path, 5).filter((s): s is Step => s.kind === 'assistant').at(-1) : undefined;
+  const now = !live ? null
+    : live.role === 'fryday' ? { actor: 'fryday' as const, text: 'reading what you wrote', since: live.started_at }
+    : storyNow({ role: live.role, tools: step?.tools ?? [], toolInputs: step?.toolInputs ?? [], text: step?.text ?? '', since: live.started_at });
 
   return {
     task: { id: task.id, title: task.title, state: task.state, projectName, createdAt: task.created_at, budget: flow.budget },

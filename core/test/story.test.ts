@@ -451,7 +451,7 @@ test('the Builder says in its own words what it did, not just "Fixed"', () => {
 
 test('a note on work that can go back to the Builder says how to send it there', () => {
   const items = buildStory(base({ task: { ...base().task, state: 'needs_owner' }, notes: [{ id: 1, body: 'it does not work', at: 900 }], runStarts: [], canSendBack: true }));
-  assert.match(items.find((i) => i.id === 'ack:1')!.text, /^Saved as a note, so nobody is working on it yet\. .*Send back to fix/);
+  assert.match(items.find((i) => i.id === 'ack:1')!.text, /^Saved as a note, so nobody is working on it yet\. .*FryDay reads it/);
 });
 
 test('work that changed after it was merged into staging is offered for a new merge first', () => {
@@ -464,4 +464,30 @@ test('nothing is offered to deploy again while the agents are rewriting the chan
   const pushed = { approvals: [], lastRoundOutcome: 'passed', hasLiveWorkspace: true, hasStaging: true, hasDeployer: true, jenkinsReady: true, release: { state: 'pushed' }, deploy: { state: 'stopped' } };
   assert.equal(askAgainOf({ ...pushed, state: 'needs_owner' }), 'deploy');
   for (const state of ['coding', 'testing', 'verifying']) assert.equal(askAgainOf({ ...pushed, state }), null, state);
+});
+
+test('the Lead\'s own answer stands in the chat, and a proposed task is a card the owner can start', () => {
+  const items = buildStory(base({
+    task: { ...base().task, state: 'needs_owner' },
+    notes: [{ id: 1, body: 'is the backend needed too?', at: 900 }, { id: 4, body: 'and now?', at: 1200 }],
+    replies: [{ id: 2, body: 'Yes. The page sends search, the server ignores it.', at: 950 }],
+    proposals: [{ id: 3, at: 951, projectName: 'Shop backend', title: 'Filter users by search', description: 'Make GET /users filter.', startedTaskId: null }],
+    runStarts: [], leadBusy: true,
+  }));
+  assert.deepEqual(items.map((i) => i.id).filter((id) => /^(note|reply|proposal):/.test(id)), ['note:1', 'reply:2', 'proposal:3', 'note:4'], 'in the order they were said');
+  assert.equal(items.some((i) => i.id.startsWith('ack:')), false, 'answered notes get no fixed line, nor the one being read now');
+  const card = items.find((i) => i.id === 'proposal:3')!;
+  assert.equal(card.text, 'A task for Shop backend: Filter users by search');
+  assert.deepEqual(card.action, { kind: 'start_task', messageId: 3, projectName: 'Shop backend', title: 'Filter users by search', description: 'Make GET /users filter.', startedTaskId: null });
+});
+
+test('the same approval given several times in a row is said once, with how often', () => {
+  const deploy = (id: string, state: string, at: number) => ({ id, action: 'deploy_stg', state, payload: { repoName: 'Shop backend' }, requestedAt: at, resolvedAt: state === 'pending' ? null : at + 5 });
+  const items = buildStory(base({
+    task: { ...base().task, state: 'awaiting_approval' },
+    approvals: [deploy('a1', 'executed', 500), deploy('a2', 'executed', 600), deploy('a3', 'executed', 700), deploy('a4', 'rejected', 800), deploy('a5', 'pending', 900)],
+  }));
+  assert.deepEqual(items.filter((i) => i.id.startsWith('decision:')).map((i) => i.text), ['Approved. (3 times)', 'Not yet.']);
+  assert.deepEqual(items.filter((i) => i.kind === 'approval').map((i) => i.id), ['approval:a3', 'approval:a4', 'approval:a5']);
+  assert.equal(items.find((i) => i.id === 'approval:a5')!.action?.kind, 'approve', 'the one still waiting keeps its buttons');
 });
