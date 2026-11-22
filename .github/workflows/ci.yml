@@ -45,6 +45,15 @@ jobs:
           # Ubuntu 24.04 and later restrict unprivileged user namespaces through AppArmor,
           # and bubblewrap needs them (see "Linux and Docker" in README.md).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # bubblewrap's AppArmor profile (present on ubuntu-24.04+) confines processes
+          # that run inside bwrap through a child profile, preventing apply-seccomp from
+          # creating its nested user+PID namespace for the seccomp filter even after the
+          # sysctl above. Remove the profile so the security layer can be applied inside
+          # the sandbox (the sysctl still blocks unprivileged namespace creation by the
+          # user command itself, which is what actually matters for security).
+          for f in /etc/apparmor.d/bwrap /etc/apparmor.d/usr.bin.bwrap; do
+            [ -f "$f" ] && sudo apparmor_parser -R "$f" 2>/dev/null || true
+          done
 
       - name: Sandbox tools (macOS)
         if: runner.os == 'macOS'
