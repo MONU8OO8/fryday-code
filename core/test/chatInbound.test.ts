@@ -49,7 +49,7 @@ const PLAN = { summary: 'Add mul.', approach: 'Export mul.', flow: [{ step: 'cal
 const PASS = { verdict: 'pass', summary: 'ok', criteria: [{ criterion: PLAN.criteria[0], met: true, evidence: 'ran it' }], issues: [] };
 
 const sh = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], { encoding: 'utf8' }).trim();
-async function waitFor(what: string, cond: () => boolean, timeoutMs = 60_000) {
+async function waitFor(what: string, cond: () => boolean, timeoutMs = process.env['CI'] ? 120_000 : 60_000) {
   const start = Date.now();
   while (!cond()) {
     if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);

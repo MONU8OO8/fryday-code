@@ -76,7 +76,10 @@ jobs:
         run: npm run typecheck
 
       - name: Tests
-        run: npm test
+        # test:ci runs files sequentially (--test-concurrency=1) so that parallel bwrap
+        # sandbox processes do not compete for CPU on the 2-core GitHub Actions runner,
+        # which otherwise pushes every sandbox-dependent test past its timeout.
+        run: npm run test:ci
         env:
           FRYDAY_DESKTOP_NOTIFY: 'off'
           FRYDAY_MEMORY_WAIT_MS: '0'

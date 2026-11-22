@@ -14,6 +14,7 @@
     "build:demo": "npm --prefix ui run build:demo",
     "record-demo": "npm --prefix core run record-demo",
     "test": "npm --prefix core test",
+    "test:ci": "npm --prefix core run test:ci",
     "typecheck": "npm --prefix core run typecheck && npm --prefix ui run typecheck",
     "redteam": "npm --prefix core run redteam",
     "e2e": "npm --prefix core run e2e",
