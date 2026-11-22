@@ -222,8 +222,17 @@ test('the sandbox around Cursor holds: only its copy of the code and its own hom
     assert.equal(probes['readCheckout'], 'done', 'it can read its copy of the code');
     assert.equal(probes['writeOwnHome'], 'done', 'it can write its own throwaway home');
     // Refused by the sandbox itself, not because something was missing.
-    for (const held of ['readCanary', 'readOwnersCursor', 'readOwnersSsh', 'writeCheckout', 'writeOutside', 'directIp']) {
-      assert.match(probes[held]!, /^refused: (EPERM|EACCES)/, `${held}: ${probes[held]}`);
+    const refused = /^refused: (EPERM|EACCES)/;
+    for (const held of ['writeCheckout', 'writeOutside', 'directIp']) {
+      assert.match(probes[held]!, refused, `${held}: ${probes[held]}`);
+    }
+    // Reads of the owner's home. macOS refuses them; bubblewrap instead hides the whole home
+    // behind a throwaway tmpfs, so there the file is not refused but absent. ENOENT only
+    // proves the sandbox for a file that is really on this machine, so each is checked only
+    // when it is, which keeps a path that was never there from passing for the wrong reason.
+    const held = process.platform === 'linux' ? /^refused: (EPERM|EACCES|ENOENT)/ : refused;
+    for (const [probe, onDisk] of [['readCanary', canary], ['readOwnersCursor', cursorDir], ['readOwnersSsh', path.join(os.homedir(), '.ssh')]] as const) {
+      if (fs.existsSync(onDisk)) assert.match(probes[probe]!, held, `${probe}: ${probes[probe]}`);
     }
     assert.match(probes['directNetwork']!, /^refused/, `directNetwork: ${probes['directNetwork']}`);
     assert.equal(probes['proxyToOtherHost'], 'refused: 403', 'the proxy refuses a host other than Cursor\'s');
