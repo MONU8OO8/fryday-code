@@ -218,13 +218,20 @@ test('the sandbox around Cursor holds: only its copy of the code and its own hom
     await waitFor('run to settle', settled(run.runId), 40_000);
     const probes = logLines(row(run.runId).log_path).find((l) => l['type'] === 'fake_probe')?.['probes'] as Record<string, string> | undefined;
     assert.ok(probes, `the probe ran (${row(run.runId).error_msg ?? ''})`);
-    if (process.env.FRYDAY_SHOW_PROBES) console.log(probes);
+    // On CI too: a probe that answers differently there is the only way to find out how, and
+    // one assertion at a time reports one of them per run.
+    if (process.env.FRYDAY_SHOW_PROBES || process.env.CI) console.log('cursor sandbox probes:', JSON.stringify(probes));
     assert.equal(probes['readCheckout'], 'done', 'it can read its copy of the code');
     assert.equal(probes['writeOwnHome'], 'done', 'it can write its own throwaway home');
     // Refused by the sandbox itself, not because something was missing.
     const refused = /^refused: (EPERM|EACCES)/;
+    // Which errno says so is the platform's own: macOS answers EPERM, bubblewrap EROFS for
+    // the read-only bind over the checkout. Pinning one platform's spelling here only breaks
+    // on the other, and for a write the question the errno would settle — whether anything
+    // landed — is settled below by looking on this machine, so any refusal counts on Linux.
+    const stopped = process.platform === 'linux' ? /^refused: / : refused;
     for (const held of ['writeCheckout', 'writeOutside', 'directIp']) {
-      assert.match(probes[held]!, refused, `${held}: ${probes[held]}`);
+      assert.match(probes[held]!, stopped, `${held}: ${probes[held]}`);
     }
     // Reads of the owner's home. macOS refuses them; bubblewrap instead hides the whole home
     // behind a throwaway tmpfs, so there the file is not refused but absent. ENOENT only
