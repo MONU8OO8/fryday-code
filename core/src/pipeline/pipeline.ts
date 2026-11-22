@@ -51,6 +51,7 @@ import { askQuestions, listQuestions, openQuestions } from './questions.js';
 import { addMessage, ownerNotes } from './thread.js';
 import { StoppedError, stoppedChoices, canStop, canSendBack } from './stopped.js';
 import { stopFollowingTask } from '../deploy/deployFlow.js';
+import { prepareDeployer } from '../deploy/ownerDeploy.js';
 import { documentsText } from './attachments.js';
 import { retryWhenBusy, cancelPendingRetry, type RetryStage } from './retry.js';
 import { verifyRound, onTesterRunExit, runProfileOf, isTesterRole, stopVerification, type VerifyHost } from './verifyFlow.js';
@@ -514,6 +515,9 @@ export function ownerAnswered(taskId: string): boolean {
 function beginWork(taskId: string, repo: Project, continueBranch: string | null): void {
   const task = getTask(taskId)!;
   setTaskState(taskId, 'workspace', continueBranch ? `Setting up a workspace on top of ${continueBranch}` : `Setting up a workspace in ${repo.name}`);
+  // While the team works: find the project's Jenkins job if it has none, so the one approval at
+  // the end can carry the change all the way to the staging server.
+  void prepareDeployer(taskId, repo.id);
   background(taskId, 'Workspace setup', async () => {
     if (continueBranch && !(await existsOnRemote(repo.localPath, continueBranch))) {
       handToOwner(taskId, `The branch ${continueBranch} is not on the remote any more. Create the task again to start from ${repo.prodBranch}.`);

@@ -203,7 +203,9 @@ export function plainApproval(action: string, payload: Record<string, unknown>, 
   const project = str(payload['repoName']) || projectName || 'the project';
   switch (action) {
     case 'release_stg':
-      return `When you approve, the change is added to ${project} and put on staging. Nothing goes live for customers.`;
+      return payload['thenDeploy']
+        ? `When you approve, the change is added to ${project}, put on staging and started on the staging server. That is the only yes I need. Nothing goes live for customers.`
+        : `When you approve, the change is added to ${project} and put on staging. Nothing goes live for customers.`;
     case 'push_branch':
       return payload['owned'] === true
         ? `When you approve, the work is added to the branch you started (${str(payload['targetBranch'])}).`
@@ -403,7 +405,7 @@ export function buildStory(input: StoryInput): StoryItem[] {
     const id = `stopped:${t.id}`;
     if (input.outcome === 'on_staging_no_deploy') {
       // The Releaser has already said "The change is on staging."
-      add({ id, at: last + 1, from: 'fryday', to: 'you', kind: 'said', text: 'This project has no automatic deploy, so deploy staging yourself.' });
+      add({ id, at: last + 1, from: 'fryday', to: 'you', kind: 'said', text: 'The staging server is not updated yet: I could not deploy it myself. Write "deploy it" here and I try again.', details: whatHappened });
     } else if (input.outcome === 'handed_over') {
       const push = input.approvals.filter((a) => a.action === 'push_branch' && a.state === 'executed').at(-1);
       add({
@@ -496,7 +498,8 @@ export function askAgainOf(f: AskAgainFacts): AskAgain {
   const jenkins = f.jenkinsReady !== false;
   if (f.release?.state === 'pushed' && jenkins && (f.deploy?.state === 'failed' || f.deploy?.state === 'stopped')) return 'deploy';
   // A declined deploy leaves no deploy row; the full task page offers "Deploy with Jenkins" then (POST /deploy).
-  if (f.release?.state === 'pushed' && !f.deploy && f.state === 'needs_owner' && f.hasDeployer && jenkins) return 'deploy';
+  // With Jenkins connected a missing deployer is no obstacle: the deploy finds the job first.
+  if (f.release?.state === 'pushed' && !f.deploy && f.state === 'needs_owner' && jenkins && (f.hasDeployer || f.jenkinsReady === true)) return 'deploy';
   const releasable = !f.release || f.release.state === 'stopped' || f.release.state === 'reverted';
   if (roundCleared(f.lastRoundOutcome) && f.hasLiveWorkspace && f.hasStaging && releasable && (f.state === 'awaiting_approval' || f.state === 'needs_owner')) return 'release';
   return null;

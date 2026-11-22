@@ -20,7 +20,9 @@ import { cannotRun, checkSpecs, runCheck, runChecks, isBlocking } from './checks
 import { depsForCheckout, depsUsable } from './deps.js';
 import { releaseToStg, revertRelease, isOnStg, type ReleaseResult, type MergedCheck } from './release.js';
 import { withRepoLock } from './repoLock.js';
-import { offerDeploy } from '../deploy/deployFlow.js';
+import { offerDeploy, oneYesToStaging } from '../deploy/deployFlow.js';
+import { ensureDeployer } from '../deploy/ownerDeploy.js';
+import { deployerOf, loadJenkinsCredentials } from '../deploy/config.js';
 
 export interface ReleaseRow {
   id: string;
@@ -126,21 +128,44 @@ function describe(result: ReleaseResult, branch: string, stg: string): { state: 
   }
 }
 
-/** The merge is on staging: offer the deploy when the project has one, else the owner deploys. */
-function afterPush(releaseId: string, note: string, stg: string): void {
+/** The Jenkins job the approved ticket said would be started after the merge; null when it named none. */
+function deployCoveredBy(approvalId: string | null): string | null {
+  if (!approvalId || !oneYesToStaging()) return null;
+  const row = getDb().prepare('SELECT payload_json FROM approvals WHERE id = ?').get(approvalId) as { payload_json: string } | undefined;
+  try {
+    const job = (JSON.parse(row?.payload_json ?? '{}') as { thenDeploy?: { job?: unknown } }).thenDeploy?.job;
+    return typeof job === 'string' ? job : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The merge is on staging. The deploy follows: started at once when the owner's yes already
+ * named the job, asked for otherwise. A project with no deployer gets one found first; only
+ * when none can be found is the deploy left to the owner, with what would let FryDay do it.
+ */
+async function afterPush(releaseId: string, note: string, stg: string): Promise<void> {
   const row = getDb().prepare('SELECT * FROM releases WHERE id = ?').get(releaseId) as ReleaseRow;
   let offer: ReturnType<typeof offerDeploy> = null;
+  let missing = `Jenkins is not connected here, so I could not deploy ${stg}. Connect it on the Connections page, then write "deploy it" on the task.`;
   try {
-    offer = offerDeploy(row);
+    const repo = getRepo(row.repo_id);
+    if (repo && !deployerOf(repo) && loadJenkinsCredentials()) {
+      setTaskNote(row.task_id, `${note} Looking for the Jenkins job that deploys ${repo.name}`);
+      const ensured = await ensureDeployer(row.repo_id);
+      missing = ensured.sentence;
+    }
+    offer = offerDeploy(row, deployCoveredBy(row.approval_id), row.approval_id);
   } catch (err) {
     offer = { asked: false, sentence: `The deploy could not be offered: ${message(err)}` };
   }
-  if (offer?.asked) {
+  if (offer?.asked || offer?.started) {
     setTaskNote(row.task_id, `${note} ${offer.sentence}`);
     sseEmit({ type: 'release_updated', taskId: row.task_id });
     return;
   }
-  tell(row.task_id, `${note} ${offer?.sentence ?? `Deploy ${stg} yourself: this project has no deployer set up.`}`);
+  tell(row.task_id, `${note} ${offer?.sentence ?? missing}`);
 }
 
 /**
@@ -195,7 +220,7 @@ export async function executeRelease(approval: { id: string; task_id: string; co
       ...(result.status !== 'pushed' && result.status !== 'already_merged' ? { merge_sha: null } : {}),
     });
     getDb().prepare(`UPDATE approvals SET state = 'executed' WHERE id = ?`).run(approval.id);
-    if (state === 'pushed') afterPush(id, note, stg);
+    if (state === 'pushed') await afterPush(id, note, stg);
     else tell(taskId, note);
   } catch (err) {
     // Something broke mid-way (network, credentials). If a merge was about to be pushed, find out whether it landed.

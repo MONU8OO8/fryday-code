@@ -35,6 +35,18 @@ export interface JobInfo {
   parameters: Array<{ name: string; type: string; defaultValue: string | null }>;
 }
 
+/** One job as the whole-server listing gives it: enough to tell which job builds which repository. */
+export interface JobSummary {
+  /** With its folders: "team/service/deploy". */
+  name: string;
+  buildable: boolean;
+  parameters: string[];
+  /** The Git remotes its last builds checked out. */
+  remotes: string[];
+  /** The branches those builds built, as Jenkins names them ("origin/stg"). */
+  branches: string[];
+}
+
 export interface QueueState {
   /** The build the item became, once it has started. */
   buildNumber: number | null;
@@ -236,6 +248,38 @@ export class JenkinsClient {
     } catch {
       return []; // the folder is not readable either: the plain "not there" stands on its own
     }
+  }
+
+  /**
+   * Every job on this Jenkins, through four levels of folders, with what its last builds checked
+   * out. One read-only request; this is how FryDay finds the job that builds a project.
+   */
+  async allJobs(): Promise<JobSummary[]> {
+    const build = 'actions[remoteUrls,lastBuiltRevision[branch[name]]]';
+    const node = `name,buildable,property[parameterDefinitions[name]],lastBuild[${build}],lastSuccessfulBuild[${build}]`;
+    const tree = `jobs[${node},jobs[${node},jobs[${node},jobs[${node}]]]]`;
+    type BuildData = { actions?: Array<{ remoteUrls?: unknown; lastBuiltRevision?: { branch?: Array<{ name?: unknown }> } } | null> } | null;
+    type Node = { name?: unknown; buildable?: unknown; jobs?: Node[]; property?: Array<{ parameterDefinitions?: Array<{ name?: unknown }> } | null>; lastBuild?: BuildData; lastSuccessfulBuild?: BuildData };
+    const raw = await this.json<{ jobs?: Node[] }>(`/api/json?tree=${tree}`);
+    const out: JobSummary[] = [];
+    const walk = (nodes: Node[] | undefined, prefix: string) => {
+      for (const n of nodes ?? []) {
+        const name = `${prefix}${String(n.name ?? '')}`;
+        if (Array.isArray(n.jobs)) { walk(n.jobs, `${name}/`); continue; }
+        const actions = [n.lastBuild, n.lastSuccessfulBuild].flatMap((b) => b?.actions ?? []).filter((a): a is NonNullable<typeof a> => !!a);
+        const remotes = actions.flatMap((a) => (Array.isArray(a.remoteUrls) ? a.remoteUrls : [])).filter((u): u is string => typeof u === 'string');
+        const branches = actions.flatMap((a) => a.lastBuiltRevision?.branch ?? []).map((b) => b.name).filter((b): b is string => typeof b === 'string');
+        out.push({
+          name,
+          buildable: n.buildable !== false,
+          parameters: (n.property ?? []).flatMap((p) => p?.parameterDefinitions ?? []).map((d) => String(d.name ?? '')).filter(Boolean),
+          remotes: [...new Set(remotes)],
+          branches: [...new Set(branches)],
+        });
+      }
+    };
+    walk(raw.jobs, '');
+    return out;
   }
 
   /** Start a build. Returns the queue item's path, which becomes a build once Jenkins starts it. */

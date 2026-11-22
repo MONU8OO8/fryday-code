@@ -112,7 +112,7 @@ async function main(): Promise<void> {
   const wrapper = path.join(root, 'claude');
   fs.writeFileSync(wrapper, `#!/bin/sh\nexport FAKE_PLAN_FILE='${planFile}'\nexec '${process.execPath}' '${path.join(__dirname, '..', 'test', 'fixtures', 'fake-claude.mjs')}' "$@"\n`, { mode: 0o755 });
 
-  const env: NodeJS.ProcessEnv = { ...process.env, FRYDAY_HOME: home, FRYDAY_MAC_NOTIFY: 'off', FRYDAY_PORT: String(PORT), CLAUDE_BIN: wrapper, FRYDAY_MEMORY_WAIT_MS: '0' };
+  const env: NodeJS.ProcessEnv = { ...process.env, FRYDAY_HOME: home, FRYDAY_MAC_NOTIFY: 'off', FRYDAY_PORT: String(PORT), CLAUDE_BIN: wrapper, FRYDAY_MEMORY_WAIT_MS: '0', FRYDAY_STAGING_APPROVALS: 'each_step' }; // this check walks every approval one by one
   for (const key of ['FRYDAY_CORE_SECRET', 'FRYDAY_DB', 'FRYDAY_RUNS', 'FRYDAY_WORKTREES', 'FRYDAY_SCRATCH', 'FRYDAY_MODEL']) delete env[key];
   core = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], { cwd: path.join(__dirname, '..'), env, stdio: keepRunning ? 'ignore' : ['ignore', 'pipe', 'pipe'], detached: keepRunning });
   core.stdout?.on('data', (c: Buffer) => { coreLog += c.toString('utf8'); });

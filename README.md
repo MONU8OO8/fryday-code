@@ -60,8 +60,12 @@ Or run the same demo locally with `npx fryday-code demo` (see [Install](#install
   service and its pages. Anything that fails goes back to the Builder with the evidence, up to 3 rounds,
   then to you.
 - **Asks before anything is pushed, merged or deployed.** A ticket for one exact commit, listing every push it
-  will make. Pushing your branch, merging into staging and deploying staging are each a separate yes.
-- **Deploys staging with Jenkins**, stage by stage, and never answers a prompt about production.
+  will make and the Jenkins job it will start. One yes takes a change all the way to the staging server;
+  Settings can switch that to a separate yes for every step.
+- **Deploys staging with Jenkins**, stage by stage, and never answers a prompt about production. A project
+  with no Jenkins job set gets its job found for it: the one that builds the project's repository.
+- **Does what you tell it in the task chat.** "approve", "deploy it", "try the deploy again", "stop": the
+  team lead carries it out, under the same rules as the buttons.
 - **Keeps you in the loop** with toasts, desktop notifications and, if you like, a Google Chat space,
   where you can also give tasks and approve with a one-time code.
 - **Shows its work.** A team chat in plain words on Home, and every agent's steps, tokens and time on
@@ -123,11 +127,14 @@ In more detail:
   the pull request. Merging into staging is a separate approval after that.
 - **Release.** On your yes, FryDay merges into the staging branch and pushes, without force. A conflict
   stops it. One button reverts it.
-- **Deploy.** For a project that names a Jenkins job, FryDay then asks whether to deploy staging. On
-  your yes it starts the job (with the staging branch as its branch parameter) and follows it, stage by
-  stage. A pipeline prompt in a staging stage ("Deploy to staging?") is put to you as its own decision;
-  a prompt that mentions production, asks for values, or does not clearly say staging is never answered
-  by FryDay. The deploy counts only when the build is shown to contain the merge on staging.
+- **Deploy.** The yes that merges also deploys: the ticket names the Jenkins job, FryDay starts it (with
+  the staging branch as its branch parameter) and follows it, stage by stage. A pipeline prompt that
+  names staging outright ("Move to STG") is answered as part of that yes; one that only might be about
+  staging is put to you; a prompt that mentions production or asks for values is never answered by
+  FryDay. The deploy counts only when the build is shown to contain the merge on staging. A project
+  without a job gets one found (the Jenkins job whose builds check out the project's repository, never
+  one named for production); the first use of a job FryDay found is yours to approve. With *Every step*
+  in Settings, the merge, the deploy and each prompt are asked one by one.
 - **Thread.** Every task has one: what was asked and answered, what happened, and a box to tell the
   agents something. The next agent to start reads it.
 
@@ -378,7 +385,9 @@ API Token). The token is kept in a file only you can read and is never shown aga
 back is reduced to its path and joined to yours. Use a Jenkins user that may build the staging jobs and
 nothing more if you can.
 
-On a project with a staging branch, tick *offer to deploy it with a Jenkins job* and give the job (with
+You can leave the deployer empty: with Jenkins connected, FryDay finds the project's job itself the
+first time a task there needs it, and tells you which one it took. To set it by hand, on a project with
+a staging branch, tick *offer to deploy it with a Jenkins job* and give the job (with
 its folders, `team/service-deploy`), the parameter that names the branch (`BRANCH`), and the stage that
 is the staging deploy (`Deploy to STG`). With a stage named, the deploy is done once that stage succeeds
 and later stages, such as a production deploy waiting for a person, are left alone; without one the

@@ -145,7 +145,7 @@ test('passing review raises a ticket for exactly that commit; the UI approves it
   assert.equal(sh(repo.origin, 'show', 'stg:src/math.js'), MATH.trim());
   assert.equal(getApproval(ticket.id)!.state, 'executed');
   assert.equal(getTask(id)!.state, 'needs_owner');
-  assert.match(note(id), new RegExp(`^Merged into stg and pushed \\(merge ${release.merge_sha!.slice(0, 8)}\\)\\. Deploy stg yourself: this project has no deployer set up\\.`));
+  assert.match(note(id), new RegExp(`^Merged into stg and pushed \\(merge ${release.merge_sha!.slice(0, 8)}\\)\\. Jenkins is not connected here, so I could not deploy stg\\.`));
   // A used ticket cannot be used again, and a merged task cannot be released twice.
   assert.throws(() => resolveApproval(ticket.id, 'approved', { via: 'cookie' }), (e: unknown) => e instanceof ApprovalError && e.status === 409);
   assert.throws(() => requestReleaseApproval(id), /already merged into stg/);

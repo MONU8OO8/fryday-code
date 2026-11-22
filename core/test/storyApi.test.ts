@@ -121,7 +121,7 @@ test('a release with no deployer, and a hand-over, read as done; a pending deplo
   assert.equal(of(deploying.id).journey.stops[4]!.state, 'waiting');
 
   const story = taskStory(staged.id)!;
-  assert.equal(story.items.at(-1)!.text, 'This project has no automatic deploy, so deploy staging yourself.');
+  assert.equal(story.items.at(-1)!.text, `The staging server is not updated yet: I could not deploy it myself. Write "deploy it" here and I try again.`);
   assert.equal(story.journey.finished, 'on_staging');
   assert.deepEqual(story.journey.stops.slice(4).map((s) => s.state), ['done', 'done']);
   assert.equal(story.journey.current, null);

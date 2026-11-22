@@ -60,6 +60,13 @@ const SettingsSchema = z.object({
   taskTokenLimit: z.number().int().positive().max(MAX_TASK_TOKENS),
   /** Coder rounds before a task is handed back to the owner. */
   maxRounds: z.number().int().min(1).max(20),
+  /**
+   * How many times the owner is asked on the way to staging. once: the yes to the merge also
+   * starts the staging deploy and answers the pipeline's own staging prompt (the ticket says so).
+   * each_step: the merge, the deploy and every pipeline prompt are asked one by one.
+   * Production is outside both: FryDay never deploys it and never answers a prompt about it.
+   */
+  stagingApprovals: z.enum(['once', 'each_step']),
   /** Agents running at the same time. */
   maxAgents: z.number().int().min(1).max(16),
   /** How the owner is nudged besides the Chat space: a macOS notification. The in-app toast is always on. */
@@ -96,6 +103,7 @@ export function defaultSettings(): Settings {
     coderEscalation: { fromRound: 3, model: 'claude-opus-5-5' },
     taskTokenLimit: 4_000_000,
     maxRounds: envInt('FRYDAY_MAX_ROUNDS', 3),
+    stagingApprovals: process.env['FRYDAY_STAGING_APPROVALS'] === 'each_step' ? 'each_step' : 'once',
     maxAgents: envInt('FRYDAY_MAX_AGENTS', 2),
     installDomains: ['registry.npmjs.org', 'registry.yarnpkg.com'],
     alerts: { mac: true },

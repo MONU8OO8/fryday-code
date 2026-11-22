@@ -12,6 +12,7 @@ interface Settings {
   coderEscalation: { fromRound: number; model: string } | null;
   taskTokenLimit: number;
   maxRounds: number;
+  stagingApprovals: 'once' | 'each_step';
   maxAgents: number;
   installDomains: string[];
   alerts: { mac: boolean };
@@ -221,6 +222,16 @@ export default function SettingsView() {
         <label className="flex flex-wrap items-center gap-3 p-4">
           <span className="min-w-[14rem] flex-1 text-hud-bright">Token budget per task <span className="block text-xs text-hud-dim">When a task has used this many tokens, it pauses and asks you.</span></span>
           <TokenInput value={s.taskTokenLimit} label="Token budget per task" onSave={(n) => void save({ taskTokenLimit: n }, 'Task token budget')} onBad={badTokens} />
+        </label>
+        <label className="flex flex-wrap items-center gap-3 p-4">
+          <span className="min-w-[14rem] flex-1 text-hud-bright">Approvals on the way to staging
+            <span className="block text-xs text-hud-dim">One yes: your approval of a change also deploys it to the staging server and answers the pipeline's own staging prompt. Every step: the merge, the deploy and each prompt are asked one by one. Production is never deployed either way.</span>
+          </span>
+          <select className={clsx(cell, '!w-36')} value={s.stagingApprovals} aria-label="Approvals on the way to staging"
+            onChange={(e) => void save({ stagingApprovals: e.target.value as Settings['stagingApprovals'] }, 'Approvals on the way to staging')}>
+            <option value="once">One yes</option>
+            <option value="each_step">Every step</option>
+          </select>
         </label>
         <label className="flex flex-wrap items-center gap-3 p-4">
           <span className="min-w-[14rem] flex-1 text-hud-bright">Builder rounds before the task comes back to you</span>

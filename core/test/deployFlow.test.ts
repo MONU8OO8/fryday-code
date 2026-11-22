@@ -25,6 +25,8 @@ process.env.FRYDAY_SCRATCH = path.join(tmp, 'scratch');
 process.env.FRYDAY_MEMORY_WAIT_MS = '0';
 process.env.CLAUDE_BIN = wrapper;
 process.env.FRYDAY_CORE_SECRET = 'test-secret-not-a-real-credential';
+// These tests are the ask-at-every-step way to staging; oneYes.test.ts covers the one-yes way.
+process.env.FRYDAY_STAGING_APPROVALS = 'each_step';
 
 import { initDb, getDb } from '../src/db/db';
 import { saveProject, overrideRepo } from '../src/registry/registry';
@@ -269,13 +271,14 @@ test('a cancelled queue item, a prompt that asks for values, and a project witho
   try {
     const other = await onStaging('No Jenkins');
     assert.equal(getTask(other)!.state, 'needs_owner');
-    assert.match(note(other), /deploys with Jenkins, but Jenkins is not set up here \(Connections page\)/);
+    assert.match(note(other), /deploys with Jenkins, but Jenkins is not connected here\. Connect it on the Connections page/);
     assert.notEqual(latestApproval(other)?.action, 'deploy_stg');
   } finally {
     saveJenkinsCredentials({ baseUrl: jenkins.url, user: jenkins.user, token: jenkins.token });
   }
   const plain = await onStaging('No deployer', false);
-  assert.match(note(plain), /Deploy stg yourself: this project has no deployer set up\./);
+  await waitFor('the search for a Jenkins job to end', () => getTask(plain)!.state === 'needs_owner');
+  assert.match(note(plain), /I looked through \d+ Jenkins jobs? and none of them builds Scratch repo's repository\. Set its job on the Projects page/, 'FryDay looked for the job itself before leaving the deploy to the owner');
 });
 
 test('the owner is nudged in the app every time, and on the Mac unless that is switched off', async () => {

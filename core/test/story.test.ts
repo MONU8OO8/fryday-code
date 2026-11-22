@@ -178,7 +178,7 @@ test('a successful ending is said in plain words, not as a stop', () => {
     task: { ...base().task, state: 'needs_owner', note },
     approvals: [ticket('a1', 'release_stg', 'executed', 500)], release: { id: 'rel-1', state: 'pushed', at: 520 }, outcome: 'on_staging_no_deploy',
   }));
-  assert.equal(staging.at(-1)!.text, 'This project has no automatic deploy, so deploy staging yourself.');
+  assert.equal(staging.at(-1)!.text, `The staging server is not updated yet: I could not deploy it myself. Write "deploy it" here and I try again.`);
   assert.equal(staging.filter((i) => /on staging/.test(i.text) && i.kind !== 'approval').length, 1, '"on staging" is said once, by the Releaser');
   assert.equal(staging.filter((i) => /I stopped/.test(i.text)).length, 0);
 

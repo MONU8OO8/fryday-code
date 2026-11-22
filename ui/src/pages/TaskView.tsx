@@ -110,9 +110,9 @@ export default function TaskView({ id }: { id: string }) {
       {error && <p role="alert" className="text-sm text-hud-red mt-2">{error}</p>}
       {askAgain && !now && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-hud-amber/40 bg-hud-amber/10 px-3.5 py-2.5 mt-3 text-sm">
-          <span className="flex-1 min-w-0">{askAgain === 'release' ? 'The change is ready. Ask me again when you want it put on staging.' : 'The staging server was not updated. Try the deploy again?'}</span>
+          <span className="flex-1 min-w-0">{askAgain === 'release' ? 'The change is ready. Ask me again when you want it put on staging.' : 'The staging server is not running this change yet.'}</span>
           <Button size="sm" disabled={busy} onClick={() => void act(() => api.post(`/tasks/${encodeURIComponent(id)}/${askAgain === 'release' ? 'approval' : 'deploy'}`, {}))}>
-            {askAgain === 'release' ? 'Ask me again' : 'Deploy again'}
+            {askAgain === 'release' ? 'Ask me again' : 'Deploy to staging'}
           </Button>
         </div>
       )}

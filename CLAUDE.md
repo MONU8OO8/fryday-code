@@ -47,13 +47,27 @@ this repo decides what those agents can touch. Treat every change as security-re
 - Core never runs a repository's git hooks and agents never run git (`core/src/pipeline/worktrees.ts`).
 - Anything that leaves the machine (push, deploy, message) goes through an approval ticket bound to a
   commit (`core/src/pipeline/approvals.ts`), and the ticket lists every push it will make (a deploy
-  ticket lists what it starts in Jenkins).
+  ticket lists what it starts in Jenkins). With "one yes" to staging (`stagingApprovals` in
+  `settings.ts`, the default) the release ticket is also the deploy's ticket: it must name the Jenkins
+  job (`thenDeploy`) and say that the staging prompt is answered, and only that job is started. A
+  deploy the owner asks for in words gets its own ticket too, approved in their name
+  (`core/src/deploy/ownerDeploy.ts`). Never start a deploy with no ticket.
+- The Lead (`core/src/pipeline/lead.ts`) has no tools; it only names an action and core carries it
+  out. It reads text agents wrote, so approve, deploy and stop are carried out only when the owner's
+  own message says so in plain words (`ownerSaid`, checked by core on the owner's text), and never for
+  a message that came through the Chat space without the ticket's code. A new Lead action that leaves
+  the machine needs a case in `ownerSaid` and a test in `core/test/oneYes.test.ts`.
+- A project's Jenkins job, when FryDay finds it, is one whose builds checked out the project's
+  repository (`core/src/deploy/discover.ts`): never one named for production, never a guess between
+  two that fit. A job named in conversation only chooses from that list; any other job is entered by
+  the owner on the Projects page. The first use of a job FryDay set is the owner's to approve.
 - From the Chat space, only the linked owner's messages are acted on (the sender id of the person who
   posted the link code), never an app's, each message once; an approval there needs the ticket's
   one-time code. `/oauth/google/callback` is the only route open without a session: it completes
   only a sign-in this install started. Test against `core/test/fixtures/stub-google.ts`.
 - FryDay never answers a Jenkins prompt that mentions production, asks for values, or does not clearly
-  say staging (`core/src/deploy/config.ts` `inputKind`), and a deploy counts only when the build is
+  say staging (`core/src/deploy/config.ts` `inputKind`); without a ticket of its own it answers only a
+  prompt that names staging outright (`answersItself`), and a deploy counts only when the build is
   shown to contain the merge on staging. Every Jenkins request goes to the configured address only
   (`core/src/deploy/jenkins.ts` `urlFor`). Test against `core/test/fixtures/stub-jenkins.ts`, never a
   real Jenkins. Never add a

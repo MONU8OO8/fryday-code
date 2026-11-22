@@ -25,8 +25,8 @@ import { startTask, stopTaskWork, StartError } from '../pipeline/pipeline.js';
 import { getWorkspaces, discardWorkspaces } from '../pipeline/workspaces.js';
 import { getRounds } from '../pipeline/rounds.js';
 import { taskFlow } from '../pipeline/flow.js';
-import { latestDeploy, askToDeployAgain } from '../deploy/deployFlow.js';
-import { JenkinsError } from '../deploy/jenkins.js';
+import { latestDeploy } from '../deploy/deployFlow.js';
+import { deployForOwner } from '../deploy/ownerDeploy.js';
 import { evidenceDir, isVerifying } from '../pipeline/verifyFlow.js';
 import { ApprovalError, latestApproval, publicApproval, requestReleaseApproval } from '../pipeline/approvals.js';
 import { ReleaseError, latestRelease, revertTaskRelease } from '../pipeline/releaseFlow.js';
@@ -180,18 +180,19 @@ tasksRouter.post('/:id/release/revert', (req, res) => {
 });
 
 // ─── POST /api/tasks/:id/deploy ───────────────────────────────────────────────
-// Ask again to deploy staging (after a deploy that failed, stopped or was declined).
-tasksRouter.post('/:id/deploy', (req, res) => {
-  const id = req.params['id'];
+// Deploy what is on staging (the first time for a project with no deployer yet, or again after
+// a deploy that failed, stopped or was declined). The job is found first when the project has
+// none. The owner pressing this at the UI is the yes for a job they know; otherwise it becomes
+// a decision. What happened is said in the task's chat.
+tasksRouter.post('/:id/deploy', async (req, res) => {
+  const id = req.params['id']!;
   const release = latestRelease(id);
   if (!release || release.state !== 'pushed') { res.status(409).json({ error: 'This task has nothing on staging to deploy' }); return; }
-  try {
-    const ticket = askToDeployAgain(id, release);
-    res.status(201).json({ approval: publicApproval(ticket) });
-  } catch (err) {
-    if (!(err instanceof JenkinsError)) throw err;
-    res.status(409).json({ error: err.message });
-  }
+  const job = typeof req.body?.job === 'string' && req.body.job.trim() ? req.body.job.trim() : null;
+  const said = await deployForOwner(id, release, { atUi: res.locals['authVia'] === 'cookie', job });
+  addMessage(id, 'fryday', 'reply', said);
+  const ticket = latestApproval(id);
+  res.status(201).json({ message: said, approval: ticket?.state === 'pending' ? publicApproval(ticket) : null });
 });
 
 // ─── DELETE /api/tasks/:id/workspace ──────────────────────────────────────────

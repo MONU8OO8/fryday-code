@@ -23,6 +23,8 @@ import { git } from './worktrees.js';
 import { executeRelease, latestRelease } from './releaseFlow.js';
 import { commitsBesidesTheTask, twinBranchName } from './release.js';
 import { ownerEmail } from './branches.js';
+import { deployerOf, deployParams, loadJenkinsCredentials } from '../deploy/config.js';
+import { oneYesToStaging, STAGING_PROMPT_EFFECT } from '../deploy/deployFlow.js';
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'expired' | 'executed';
 
@@ -127,9 +129,21 @@ export function requestReleaseApproval(taskId: string): ApprovalRow {
       /* staging not fetched yet: the release itself decides */
     }
   }
+  // One yes for the whole way to staging: the ticket names the Jenkins job that follows the merge,
+  // so the owner approves the deploy here and is not asked a second and third time.
+  const deployer = oneYesToStaging() && loadJenkinsCredentials() ? deployerOf(repo) : null;
+  const params = deployer ? deployParams(deployer, repo.stgBranch) : {};
   const payload = {
-    summary: `${alreadyPushed ? `Merge ${alreadyPushed}` : `Push ${ws.branch} and merge it`} into ${repo.stgBranch} (${repo.name}).${carried}`.replace(/\)\.$/, ')'),
+    summary: `${alreadyPushed ? `Merge ${alreadyPushed}` : `Push ${ws.branch} and merge it`} into ${repo.stgBranch} (${repo.name})${deployer ? ', then deploy it to staging with Jenkins' : ''}.${carried}`.replace(/\)\.$/, ')'),
     pushes,
+    ...(deployer ? {
+      thenDeploy: { job: deployer.job, params },
+      effects: [
+        `then starts the Jenkins job ${deployer.job}${Object.keys(params).length ? ` with ${Object.entries(params).map(([k, v]) => `${k}=${v}`).join(', ')}` : ''} to deploy ${repo.stgBranch}`,
+        STAGING_PROMPT_EFFECT,
+        'any prompt in the pipeline that mentions production is never answered by FryDay',
+      ],
+    } : {}),
     repoId: repo.id,
     repoName: repo.name,
     branch: ws.branch,
@@ -147,7 +161,7 @@ export function requestReleaseApproval(taskId: string): ApprovalRow {
  * Put a question to the owner. A task has at most one open ticket: raising a new one
  * voids the one before it.
  */
-export function raiseTicket(taskId: string, action: string, payload: Record<string, unknown> & { summary: string }, commitSha: string | null): ApprovalRow {
+export function raiseTicket(taskId: string, action: string, payload: Record<string, unknown> & { summary: string }, commitSha: string | null, announce = true): ApprovalRow {
   if (!actions.has(action)) throw new Error(`No handler is registered for the approval action "${action}"`);
   getDb().prepare(`UPDATE approvals SET state = 'expired', resolved_at = ? WHERE task_id = ? AND state = 'pending'`).run(nowMs(), taskId);
   const id = `apr-${randomUUID()}`;
@@ -158,7 +172,8 @@ export function raiseTicket(taskId: string, action: string, payload: Record<stri
   const row = getApproval(id)!;
   sseEmit({ type: 'approval_requested', taskId, approval: publicApproval(row) });
   const task = getTask(taskId);
-  if (task) ticketListener?.(task, payload.summary, Array.isArray(payload['pushes']) ? (payload['pushes'] as string[]) : [], row);
+  // A ticket the owner has just answered in their own words is recorded, not announced as a question.
+  if (task && announce) ticketListener?.(task, payload.summary, Array.isArray(payload['pushes']) ? (payload['pushes'] as string[]) : [], row);
   return row;
 }
 

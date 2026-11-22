@@ -144,6 +144,22 @@ export function inputKind(stageName: string | null, message: string, proceedText
   return 'unclear';
 }
 
+/** A job or stage name that is about production. FryDay never sets one up as a staging deployer. */
+export const looksLikeProduction = (text: string): boolean => PRODUCTION.test(text);
+export const looksLikeStaging = (text: string): boolean => STAGING.test(text);
+
+const SAYS_STAGING = /(^|[^a-z])(stg|stag|staging|pre-?prod|uat)([^a-z]|$)/i;
+
+/**
+ * Whether FryDay may answer a pipeline prompt itself, under a yes the owner gave for "put it on
+ * staging". Stricter than what may be put to the owner: the prompt has to name staging outright
+ * ("Move to STG"). A prompt that only says "test" or "dev" could be the gate before anything,
+ * so that one still goes to the owner.
+ */
+export function answersItself(stageName: string | null, message: string, proceedText: string, hasParameters: boolean): boolean {
+  return !hasParameters && inputKind(stageName, message, proceedText) === 'staging' && SAYS_STAGING.test(`${stageName ?? ''} ${message} ${proceedText}`);
+}
+
 // ─── Checking a setup before it is kept ───────────────────────────────────────
 
 /**

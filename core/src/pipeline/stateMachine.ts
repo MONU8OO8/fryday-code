@@ -39,7 +39,7 @@ const TRANSITIONS: Record<TaskState, TaskState[]> = {
   testing:           ['coding', 'verifying', 'awaiting_approval', 'needs_owner', 'failed'],
   verifying:         ['coding', 'awaiting_approval', 'needs_owner', 'failed'], // coding: a tester found a problem in the running service
   awaiting_approval: ['releasing', 'deploying', 'coding', 'needs_owner', 'failed'], // needs_owner: the owner declined the release
-  releasing:         ['deployed', 'awaiting_approval', 'needs_owner', 'failed'], // awaiting_approval: one push done, the next needs its own yes
+  releasing:         ['deployed', 'awaiting_approval', 'deploying', 'needs_owner', 'failed'], // awaiting_approval: one push done, the next needs its own yes; deploying: the yes covered the deploy too
   deploying:         ['deployed', 'awaiting_approval', 'needs_owner', 'failed'], // awaiting_approval: the pipeline asks a question only the owner may answer
   deployed:          [],
   failed:            [],

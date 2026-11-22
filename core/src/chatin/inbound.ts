@@ -27,7 +27,7 @@ import { listNewMessages, type ChatMessage } from './reader.js';
 import { parseCommand, HELP_TEXT, type Command } from './commands.js';
 import { createTask, getTask } from '../pipeline/taskState.js';
 import { startTask, ownerAnswered, StartError, stopTask, StoppedError } from '../pipeline/pipeline.js';
-import { askLead, openProposal, startProposal, LeadError } from '../pipeline/lead.js';
+import { askLead, markFromChat, openProposal, startProposal, LeadError } from '../pipeline/lead.js';
 import { answerQuestion, openQuestions, skipOpenQuestions, QuestionError } from '../pipeline/questions.js';
 import { addMessage } from '../pipeline/thread.js';
 import { ApprovalError, latestApproval, resolveApproval } from '../pipeline/approvals.js';
@@ -232,7 +232,7 @@ async function onAnswer(taskId: string, c: Extract<Command, { kind: 'answer' }>)
     if (open.length > 1) {
       await reply(`There are ${open.length} questions open; start your answer with its number, like \`1: ...\`. I kept your message as a note for the agents.`, { taskId });
     }
-    addMessage(taskId, 'owner', 'note', c.text);
+    markFromChat(taskId, addMessage(taskId, 'owner', 'note', c.text).id);
     sseEmit({ type: 'task_message', taskId });
     // The Lead reads it and answers in this thread (notify/owner.ts passes its words on).
     if (open.length === 0 && !askLead(taskId)) await reply('Noted on the task; FryDay answers when it has finished reading your last message.', { taskId });
@@ -308,7 +308,7 @@ async function handle(m: ChatMessage, s: InboundState): Promise<void> {
     case 'answer':
       return onAnswer(taskId, c);
     case 'note':
-      addMessage(taskId, 'owner', 'note', c.text);
+      markFromChat(taskId, addMessage(taskId, 'owner', 'note', c.text).id);
       sseEmit({ type: 'task_message', taskId });
       if (!askLead(taskId)) return reply('Noted on the task; FryDay answers when it has finished reading your last message.', { taskId });
       return;

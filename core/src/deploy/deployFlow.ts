@@ -26,7 +26,9 @@ import { gitAsync } from '../pipeline/worktrees.js';
 import { raiseTicket, registerApprovalAction, type ApprovalRow } from '../pipeline/approvals.js';
 import type { ReleaseRow } from '../pipeline/releaseFlow.js';
 import { JenkinsClient, JenkinsError, type Stage, type Transport } from './jenkins.js';
-import { deployerOf, deployParams, inputKind, loadJenkinsCredentials, type JenkinsDeployer } from './config.js';
+import { answersItself, deployerOf, deployParams, inputKind, loadJenkinsCredentials, type JenkinsDeployer } from './config.js';
+import { getSettings } from '../settings.js';
+import { addMessage } from '../pipeline/thread.js';
 
 export interface DeployRow {
   id: string;
@@ -63,6 +65,13 @@ export function setDeployTransport(t: Transport | undefined, poll = 5000): void 
   pollMs = poll;
 }
 
+/** One yes for the whole way to staging (Settings); otherwise each step is asked. */
+export const oneYesToStaging = (): boolean => getSettings().stagingApprovals === 'once';
+
+export function jenkinsClient(): JenkinsClient {
+  return client();
+}
+
 function client(): JenkinsClient {
   const creds = loadJenkinsCredentials();
   if (!creds) throw new JenkinsError('Jenkins is not set up: add its address, a user and an API token on the Connections page');
@@ -95,6 +104,14 @@ function end(row: DeployRow, state: 'succeeded' | 'failed' | 'stopped', outcome:
   else setTaskNote(row.task_id, note);
 }
 
+/** Something stopped before a deploy existed: the task goes to the owner with the reason. */
+function handBack(taskId: string, note: string): void {
+  const task = getTask(taskId);
+  if (!task) return;
+  if (task.state !== 'needs_owner' && canTransition(task.state, 'needs_owner')) setTaskState(taskId, 'needs_owner', note);
+  else setTaskNote(taskId, note);
+}
+
 // ─── Asking ───────────────────────────────────────────────────────────────────
 
 /**
@@ -102,14 +119,26 @@ function end(row: DeployRow, state: 'succeeded' | 'failed' | 'stopped', outcome:
  * set up, ask the owner whether to deploy. Returns the sentence for the owner, or null
  * when deploying is not set up for this project.
  */
-export function offerDeploy(release: Pick<ReleaseRow, 'id' | 'task_id' | 'repo_id' | 'stg_branch' | 'merge_sha' | 'head_sha'>): { asked: boolean; sentence: string } | null {
+export function offerDeploy(
+  release: Pick<ReleaseRow, 'id' | 'task_id' | 'repo_id' | 'stg_branch' | 'merge_sha' | 'head_sha'>,
+  /** The job the owner's yes already named (the release ticket said the deploy follows): start it, do not ask again. */
+  coveredJob: string | null = null,
+  /** That release ticket. */
+  coveredTicket: string | null = null,
+): { asked: boolean; started?: boolean; sentence: string } | null {
   const repo = getRepo(release.repo_id);
   const deployer = repo ? deployerOf(repo) : null;
   if (!repo || !deployer) return null;
-  if (!loadJenkinsCredentials()) return { asked: false, sentence: `${repo.name} deploys with Jenkins, but Jenkins is not set up here (Connections page). Deploy ${release.stg_branch} yourself, or set it up and ask again on the task.` };
+  if (!loadJenkinsCredentials()) return { asked: false, sentence: `${repo.name} deploys with Jenkins, but Jenkins is not connected here. Connect it on the Connections page, then write "deploy it" on the task.` };
   // Already-merged releases have no merge of their own: the reviewed commit must be on staging then.
   const expected = release.merge_sha ?? release.head_sha;
-  requestDeployApproval(release.task_id, { repoId: repo.id, repoName: repo.name, stg: release.stg_branch, expectedSha: expected, releaseId: release.id, deployer });
+  const ask: DeployAsk = { repoId: repo.id, repoName: repo.name, stg: release.stg_branch, expectedSha: expected, releaseId: release.id, deployer };
+  if (coveredJob !== null && coveredTicket !== null && coveredJob === deployer.job) {
+    // No ticket of its own: the release ticket the owner approved listed this job, and is the deploy's ticket.
+    void beginDeploy(release.task_id, ask, coveredTicket).catch((err) => handBack(release.task_id, `The deploy could not be started: ${message(err)}`));
+    return { asked: false, started: true, sentence: `Starting ${deployer.job} in Jenkins to deploy ${release.stg_branch}.` };
+  }
+  requestDeployApproval(release.task_id, ask);
   return { asked: true, sentence: `Deploy ${release.stg_branch} with Jenkins (${deployer.job})? Approve on the task.` };
 }
 
@@ -123,7 +152,7 @@ export function askToDeployAgain(taskId: string, latestPushed: Pick<ReleaseRow, 
   return getDb().prepare(`SELECT * FROM approvals WHERE task_id = ? AND state = 'pending' ORDER BY requested_at DESC LIMIT 1`).get(taskId) as ApprovalRow;
 }
 
-interface DeployAsk {
+export interface DeployAsk {
   repoId: string;
   repoName: string;
   stg: string;
@@ -132,7 +161,7 @@ interface DeployAsk {
   deployer: JenkinsDeployer;
 }
 
-export function requestDeployApproval(taskId: string, ask: DeployAsk): ApprovalRow {
+export function requestDeployApproval(taskId: string, ask: DeployAsk, announce = true): ApprovalRow {
   const params = deployParams(ask.deployer, ask.stg);
   const task = getTask(taskId);
   if (task && task.state !== 'awaiting_approval' && canTransition(task.state, 'awaiting_approval')) setTaskState(taskId, 'awaiting_approval', `Ready to deploy ${ask.stg}`);
@@ -149,10 +178,14 @@ export function requestDeployApproval(taskId: string, ask: DeployAsk): ApprovalR
     effects: [
       `starts ${ask.deployer.job}${Object.keys(params).length ? ` with ${Object.entries(params).map(([k, v]) => `${k}=${v}`).join(', ')}` : ''}`,
       ask.deployer.stage ? `counts as deployed once its "${ask.deployer.stage}" stage succeeds and the build is shown to contain ${short(ask.expectedSha)}` : `counts as deployed once the build succeeds and is shown to contain ${short(ask.expectedSha)}`,
+      ...(oneYesToStaging() ? [STAGING_PROMPT_EFFECT] : []),
       'any prompt in the pipeline that mentions production is never answered by FryDay',
     ],
-  }, null);
+  }, null, announce);
 }
+
+/** Said on every ticket whose yes also covers the pipeline's staging prompt. */
+export const STAGING_PROMPT_EFFECT = 'answers the pipeline\'s own staging prompt (one that names staging, like "Move to STG") without asking you again';
 
 // ─── Starting ─────────────────────────────────────────────────────────────────
 
@@ -160,19 +193,30 @@ async function startDeploy(ticket: ApprovalRow): Promise<void> {
   const p = JSON.parse(ticket.payload_json) as { job: string; params: Record<string, string>; stage: string | null; expectedSha: string; releaseId: string | null; repoId: string; stgBranch: string };
   const repo = getRepo(p.repoId);
   const deployer = repo ? deployerOf(repo) : null;
-  const taskId = ticket.task_id;
+  // The project's deploy settings could have changed since the ticket was raised: the yes was for what the ticket said.
+  if (!repo || !deployer || deployer.job !== p.job) throw new JenkinsError('The deploy settings of the project changed after you were asked; ask again on the task');
+  await beginDeploy(ticket.task_id, { repoId: p.repoId, repoName: repo.name, stg: p.stgBranch, expectedSha: p.expectedSha, releaseId: p.releaseId, deployer }, ticket.id, p.params);
+}
+
+/**
+ * Start the Jenkins job and follow it. The owner's yes was given before this is called, on the
+ * ticket named here: a deploy ticket, or the release ticket that listed this job.
+ */
+async function beginDeploy(taskId: string, ask: DeployAsk, approvalId: string, ticketParams?: Record<string, string>): Promise<void> {
   const task = getTask(taskId);
   if (!task || !canTransition(task.state, 'deploying')) throw new JenkinsError(`${taskId} is ${task?.state ?? 'gone'}; it cannot be deployed from there`);
-  // The project's deploy settings could have changed since the ticket was raised: the yes was for what the ticket said.
-  if (!deployer || deployer.job !== p.job) throw new JenkinsError('The deploy settings of the project changed after you were asked; ask again on the task');
+  const current = latestDeploy(taskId);
+  if (current && ['queued', 'running', 'waiting_input'].includes(current.state)) throw new JenkinsError('A deploy of this task is still going');
+  const p = { job: ask.deployer.job, params: ticketParams ?? deployParams(ask.deployer, ask.stg), stage: ask.deployer.stage, expectedSha: ask.expectedSha, releaseId: ask.releaseId, repoId: ask.repoId };
+  const deployer = ask.deployer;
 
   const id = `dep-${randomUUID()}`;
   getDb().prepare(`
     INSERT INTO deploys (id, task_id, repo_id, release_id, approval_id, job, params_json, stage, expected_sha, state, started_at, deadline_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
-  `).run(id, taskId, p.repoId, p.releaseId, ticket.id, p.job, JSON.stringify(p.params), p.stage, p.expectedSha, nowMs(), nowMs() + deployer.timeoutMinutes * 60_000);
+  `).run(id, taskId, p.repoId, p.releaseId, approvalId, p.job, JSON.stringify(p.params), p.stage, p.expectedSha, nowMs(), nowMs() + deployer.timeoutMinutes * 60_000);
   setTaskState(taskId, 'deploying', `Starting ${p.job} in Jenkins`);
-  getDb().prepare(`UPDATE approvals SET state = 'executed' WHERE id = ?`).run(ticket.id);
+  getDb().prepare(`UPDATE approvals SET state = 'executed' WHERE id = ? AND action = 'deploy_stg'`).run(approvalId);
   sseEmit({ type: 'deploy_updated', taskId });
 
   let queuePath: string;
@@ -264,6 +308,13 @@ async function look(row: DeployRow): Promise<boolean> {
   if (inputs.length > 0) {
     const input = inputs[0]!;
     const paused = pipeline?.stages.find((s) => s.status === 'PAUSED_PENDING_INPUT') ?? null;
+    // The owner's yes to "put it on staging" said this prompt would be answered (the ticket lists it).
+    if (oneYesToStaging() && answersItself(paused?.name ?? null, input.message, input.proceedText, input.hasParameters) && mayAnswerItself(row.id, input.id)) {
+      await jenkins.proceed(row.job, row.build_number!, input.id);
+      update(row.id, { detail: `Answered "${input.proceedText}" to "${input.message || input.proceedText}"` });
+      addMessage(row.task_id, 'fryday', 'reply', `Jenkins asked "${input.message || input.proceedText}" for ${row.job} #${row.build_number}. I answered "${input.proceedText}": it is the staging step you approved.`);
+      return true;
+    }
     return askAboutInput(row, input.id, input.message, input.proceedText, input.hasParameters, paused);
   }
 
@@ -275,6 +326,17 @@ async function look(row: DeployRow): Promise<boolean> {
   if (build.result === 'SUCCESS') return finishIfRightCommit(row, build.builtShas, 'the build succeeded');
   end(row, 'failed', 'build_failed', `${row.job} #${build.number} ended ${build.result ?? 'without a result'}. Nothing more was done. ${build.url}`);
   return false;
+}
+
+// A prompt is answered once, and a deploy gets a few such answers at most: a pipeline that keeps
+// asking is not one FryDay should keep saying yes to.
+const selfAnswered = new Map<string, Set<string>>();
+function mayAnswerItself(deployId: string, inputId: string): boolean {
+  const seen = selfAnswered.get(deployId) ?? new Set<string>();
+  if (seen.has(inputId) || seen.size >= 3) return false;
+  seen.add(inputId);
+  selfAnswered.set(deployId, seen);
+  return true;
 }
 
 /** The build succeeded: it counts only if it built the merge FryDay pushed (or a later staging that contains it). */

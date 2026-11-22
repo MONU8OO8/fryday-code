@@ -29,6 +29,10 @@ export interface StubJob {
   parameters?: Array<{ name: string; defaultValue: string }>;
   /** Cancel queue items instead of starting them. */
   cancelInQueue?: boolean;
+  /** The Git remote its last build checked out, as the whole-server listing reports it. */
+  remote?: string;
+  /** The branch that build built ("stg"). */
+  lastBranch?: string;
 }
 
 interface Build {
@@ -137,6 +141,16 @@ export class StubJenkins {
     }
   }
 
+  private listing(prefix: string): unknown[] {
+    const heads = [...new Set([...this.jobs.keys()].filter((n) => n.startsWith(prefix)).map((n) => n.slice(prefix.length).split('/')[0]!))];
+    return heads.map((name) => {
+      const job = this.jobs.get(`${prefix}${name}`);
+      if (!job) return { name, jobs: this.listing(`${prefix}${name}/`) };
+      const data = job.remote ? { actions: [{ remoteUrls: [job.remote], lastBuiltRevision: { branch: job.lastBranch ? [{ name: `refs/remotes/origin/${job.lastBranch}` }] : [] } }] } : null;
+      return { name, buildable: true, property: job.parameters ? [{ parameterDefinitions: job.parameters.map((p) => ({ name: p.name })) }] : [], lastBuild: data, lastSuccessfulBuild: data };
+    });
+  }
+
   private handle(req: http.IncomingMessage, res: http.ServerResponse, body: string): void {
     const url = new URL(req.url ?? '/', this.url);
     const path = url.pathname;
@@ -159,6 +173,9 @@ export class StubJenkins {
       return;
     }
     if (path === '/me/api/json') { this.json(res, 200, { id: this.user, fullName: 'FryDay Test' }); return; }
+
+    // The whole server: folders with their jobs, and what each job's last build checked out.
+    if (path === '/api/json') { this.json(res, 200, { jobs: this.listing('') }); return; }
 
     const q = path.match(/^\/queue\/item\/(\d+)\/api\/json$/);
     if (q) {
