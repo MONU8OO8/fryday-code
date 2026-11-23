@@ -15,6 +15,7 @@ interface Settings {
   stagingApprovals: 'once' | 'each_step';
   semanticSearch: boolean;
   recheckModel: string | null;
+  autoBugs: { enabled: boolean; autoStart: boolean; dailyCap: number };
   maxAgents: number;
   installDomains: string[];
   alerts: { mac: boolean };
@@ -239,6 +240,21 @@ export default function SettingsView() {
             <option value="each_step">Every step</option>
           </select>
         </label>
+        <div className="flex flex-wrap items-center gap-3 p-4">
+          <span className="min-w-[14rem] flex-1 text-hud-bright">Bugs the agents find
+            <span className="block text-xs text-hud-dim">A check that already fails on production, or a problem a tester sees that the task did not cause, becomes a bug card. Started by itself: the team picks it up when a slot is free. You still approve anything that is pushed.</span>
+          </span>
+          <label className="flex items-center gap-1.5 text-xs text-hud-dim">
+            <input type="checkbox" className="h-4 w-4" checked={s.autoBugs.enabled} onChange={(e) => void save({ autoBugs: { ...s.autoBugs, enabled: e.target.checked } }, 'Bugs')} />File them
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-hud-dim">
+            <input type="checkbox" className="h-4 w-4" disabled={!s.autoBugs.enabled} checked={s.autoBugs.autoStart} onChange={(e) => void save({ autoBugs: { ...s.autoBugs, autoStart: e.target.checked } }, 'Bugs')} />Start by itself
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-hud-dim">At most
+            <input className={clsx(cell, '!w-16')} type="number" min="1" max="50" step="1" disabled={!s.autoBugs.enabled} defaultValue={s.autoBugs.dailyCap} key={`bc-${s.autoBugs.dailyCap}`}
+              onBlur={(e) => { const n = num(e.target.value, 1); if (n !== null && n !== s.autoBugs.dailyCap) void save({ autoBugs: { ...s.autoBugs, dailyCap: Math.round(n) } }, 'Bugs'); }} />a day
+          </label>
+        </div>
         <label className="flex flex-wrap items-center gap-3 p-4">
           <span className="min-w-[14rem] flex-1 text-hud-bright">Search code by meaning
             <span className="block text-xs text-hud-dim">FryDay finds the code a task is about and hands it to the agents, so they read less. On: by keyword and by meaning, with a small model that runs on this Mac (downloaded once, about 35 MB; no code leaves the Mac). Off: by keyword only.</span>

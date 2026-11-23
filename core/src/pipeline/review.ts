@@ -236,6 +236,14 @@ export function calibrate(criteria: string[], claims: SelfClaim[], verdict: Verd
 }
 
 /** What the coder is told when a round is sent back. */
+/** A test that tried to open a network port inside the check sandbox. */
+const NO_PORTS = /listen E(PERM|ACCES|ADDRNOTAVAIL)|operation not permitted[^\n]*(listen|bind|127\.0\.0\.1|localhost)|EPERM[^\n]*(listen|bind)|server did not start/i;
+export const NO_PORTS_HINT =
+  '## Why a test could not start a server\n\n' +
+  'The checks run with no network at all: a test cannot open a port, not even on 127.0.0.1 (that is the `listen EPERM` or the server that never starts). ' +
+  'This is how FryDay runs every check, so it will not change. Test the HTTP code without listening: call the request handler or the app object directly ' +
+  'with a fake request and response, or test the function behind the route. Keep any test that already worked as it was.';
+
 export function coderFeedback(round: number, checks: CheckResult[], flags: DiffFlag[], verdict: Verdict | null, calibration: Calibration | null = null): string {
   const parts = [`The review of round ${round} found problems. Fix them in this same workspace, then finish with your report.`];
 
@@ -249,6 +257,7 @@ export function coderFeedback(round: number, checks: CheckResult[], flags: DiffF
         : '';
       parts.push(`${checkLine(c)}${fresh}\n\n\`\`\`\n${tail(c.output.trim(), CHECK_OUTPUT_CHARS)}\n\`\`\``);
     }
+    if (failing.some((c) => NO_PORTS.test(c.output))) parts.push(NO_PORTS_HINT);
   }
 
   const blocking = flags.filter((f) => f.severity === 'blocking');

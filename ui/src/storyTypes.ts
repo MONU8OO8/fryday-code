@@ -106,4 +106,6 @@ export interface BoardFacts {
   /** For an initiative: the same sub-tasks with what the page shows of each. */
   parts?: Array<{ id: string; title: string; state: string; label: string }>;
   agent: { runId: string; who: string; since: number } | null;
+  /** A bug card FryDay filed from what an agent found; absent or null for your own tasks. */
+  bug?: { foundIn: string; foundBy: string; severity: 'blocking' | 'minor'; reproduced: 'yes' | 'no' | 'pending' | null } | null;
 }

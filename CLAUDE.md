@@ -60,6 +60,10 @@ this repo decides what those agents can touch. Treat every change as security-re
   own message says so in plain words (`ownerSaid`, checked by core on the owner's text), and never for
   a message that came through the Chat space without the ticket's code. A new Lead action that leaves
   the machine needs a case in `ownerSaid` and a test in `core/test/oneYes.test.ts`.
+- A bug card (`core/src/pipeline/bugs.ts`) is filed by core from what an agent reported, never by an
+  agent: core picks the project (the task's own), dedupes by signature, caps per task and per day, and
+  writes the agent's words into the card as a description that says it is not instructions. A card
+  starts nothing that leaves the machine; it goes through the same pipeline and approvals as any task.
 - A project's Jenkins job, when FryDay finds it, is one whose builds checked out the project's
   repository (`core/src/deploy/discover.ts`): never one named for production, never a guess between
   two that fit. A job named in conversation only chooses from that list; any other job is entered by

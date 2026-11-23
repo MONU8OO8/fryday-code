@@ -24,6 +24,8 @@ export interface TaskRow {
   parent_id: string | null;
   priority: Priority;
   kind: 'task' | 'initiative';
+  /** owner: asked for by the owner; bug: filed by core from a problem an agent found (bugs.ts). */
+  origin: 'owner' | 'bug';
   auto_start: number;
   position: number;
 }
@@ -132,6 +134,7 @@ export interface NewTaskOptions {
   autoStart?: boolean;
   /** Kept for the scheduler: the project and branch to start it with. */
   metadata?: Record<string, unknown>;
+  origin?: 'owner' | 'bug';
 }
 
 /** Create a queued task. The API, the Chat space and an initiative's split all make tasks through this. */
@@ -142,12 +145,12 @@ export function createTask(title: string, description: string, opts: NewTaskOpti
     const taskId = `T-${seq}`;
     const now = nowMs();
     db.prepare(`
-      INSERT INTO tasks (id, seq, title, description, state, created_at, updated_at, priority, kind, parent_id, auto_start, position, metadata_json)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, seq, title, description, state, created_at, updated_at, priority, kind, parent_id, auto_start, position, metadata_json, origin)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       taskId, seq, title, description, now, now,
       opts.priority ?? 'p2', opts.kind ?? 'task', opts.parentId ?? null, opts.autoStart ? 1 : 0, seq,
-      opts.metadata ? JSON.stringify(opts.metadata) : null,
+      opts.metadata ? JSON.stringify(opts.metadata) : null, opts.origin ?? 'owner',
     );
     return taskId;
   })();

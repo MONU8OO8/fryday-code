@@ -78,6 +78,13 @@ const SettingsSchema = z.object({
    * is enough to confirm a fix; the first round, and any round with new work, keep the Checker's own.
    */
   recheckModel: z.enum(MODELS).nullable(),
+  /**
+   * Bugs the agents find that the task at hand did not cause: core files them as bug cards
+   * (bugs.ts). autoStart: the scheduler picks them up like any auto-start task, within the agent
+   * slots and the machine's limits; pushes and deploys still wait for the owner. dailyCap: at most
+   * this many filed in 24 hours.
+   */
+  autoBugs: z.object({ enabled: z.boolean(), autoStart: z.boolean(), dailyCap: z.number().int().min(1).max(50) }).strict(),
   /** Agents running at the same time. */
   maxAgents: z.number().int().min(1).max(16),
   /** How the owner is nudged besides the Chat space: a macOS notification. The in-app toast is always on. */
@@ -119,6 +126,7 @@ export function defaultSettings(): Settings {
     stagingApprovals: process.env['FRYDAY_STAGING_APPROVALS'] === 'each_step' ? 'each_step' : 'once',
     semanticSearch: process.env['FRYDAY_EMBED'] !== 'off',
     recheckModel: 'claude-sonnet-5-5',
+    autoBugs: { enabled: true, autoStart: true, dailyCap: 5 },
     maxAgents: envInt('FRYDAY_MAX_AGENTS', 2),
     installDomains: ['registry.npmjs.org', 'registry.yarnpkg.com'],
     alerts: { mac: true },

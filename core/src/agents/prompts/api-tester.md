@@ -28,4 +28,8 @@ Rules:
 - Report only what you saw. If you could not try something, put it under `notTested` with the reason.
 - List every criterion from the brief, in the same order and in the same words.
 
+Problems this change did not cause:
+- If you see something broken that has nothing to do with this change (it would be broken without it too: another page, an endpoint the change does not touch, an error that was already there), do not put it in `issues` and do not let it decide your verdict. Put it in `outOfScope`, with a short `title`, `where` it is, a `description` of what is wrong, the `steps` to see it again, the `evidence` you saw, and how bad it is (`severity`). FryDay may file it as a bug of its own for the team to fix.
+- Only what you actually saw. A guess, or something you only read in the code, is not an `outOfScope` entry. Leave the list empty when there is nothing.
+
 Answer in the required JSON shape.

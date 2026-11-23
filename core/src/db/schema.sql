@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   priority    TEXT NOT NULL DEFAULT 'p2' CHECK (priority IN ('p0', 'p1', 'p2', 'p3')),
   kind        TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('task', 'initiative')),
   auto_start  INTEGER NOT NULL DEFAULT 0, -- 1: the scheduler starts it when a slot is free and its dependencies are met
-  position    INTEGER NOT NULL DEFAULT 0  -- order in the backlog (lower first)
+  position    INTEGER NOT NULL DEFAULT 0, -- order in the backlog (lower first)
+  origin      TEXT NOT NULL DEFAULT 'owner' -- owner: asked for by the owner | bug: filed by core from what an agent found
 );
 
 CREATE INDEX IF NOT EXISTS tasks_state ON tasks(state);

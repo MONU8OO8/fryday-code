@@ -56,6 +56,7 @@ function migrate(db: Database.Database): void {
   addColumn('tasks', 'auto_start', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('tasks', 'position', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('task_rounds', 'self_check_json', 'TEXT');
+  addColumn('tasks', 'origin', "TEXT NOT NULL DEFAULT 'owner'");
   db.exec('CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_id)');
   // A follow-up started before v2 kept its link in metadata; it becomes a link row once.
   const followUps = db.prepare(`SELECT id, json_extract(metadata_json, '$.followUpOf') AS of FROM tasks WHERE json_extract(metadata_json, '$.followUpOf') IS NOT NULL`).all() as Array<{ id: string; of: string }>;

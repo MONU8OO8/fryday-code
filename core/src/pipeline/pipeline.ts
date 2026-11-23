@@ -70,6 +70,9 @@ import { codePackFor } from '../knowledge/index/forTask.js';
 import { rememberTask, similarTasks } from '../knowledge/index/memory.js';
 import { kickEmbedding } from '../knowledge/index/indexer.js';
 import { budgetedDiff } from './diffBudget.js';
+import { bugOf, bugsFromChecks, markReproduced } from './bugs.js';
+import { failureKey } from '../learning/signatures.js';
+import { productionSha } from '../knowledge/scan.js';
 
 const prompt = (name: string) => fs.readFileSync(path.join(__dirname, '..', 'agents', 'prompts', `${name}.md`), 'utf8').trim();
 const PLANNER_PROMPT = prompt('planner');
@@ -330,6 +333,16 @@ export function startTask(taskId: string, repoId: string | null = null, opts: St
   const repo = repoId ? usableProject(repoId) : null;
   if (!repo && !listRepos().some((r) => r.verified)) throw new StartError('Add and confirm a project first (Projects page)');
   saveIntake(taskId, { ...intakeOf(task), repoId: repo?.id ?? null, branch });
+  const bug = bugOf(task);
+  if (repo && bug?.check && bug.reproduced === 'pending') {
+    // A bug from a failing check is run again on production by core first: no agent is started
+    // for a problem that is not there any more.
+    setTaskState(taskId, 'intake', `Reproducing: running ${bug.check.name} on ${repo.prodBranch}`);
+    background(taskId, 'Reproducing the bug', async () => {
+      if (await reproduceCheckBug(taskId, repo, bug.check!)) await runIntake(taskId);
+    });
+    return;
+  }
   setTaskState(taskId, 'intake', repo ? `Reading the task and ${repo.name}` : 'Working out which project this is for');
   background(taskId, 'Reading the task', () => runIntake(taskId));
 }
@@ -878,6 +891,7 @@ export async function reviewRound(taskId: string, round: number): Promise<void> 
       });
   saveGate(taskId, round, headSha, checks, flags);
   sseEmit({ type: 'round_updated', taskId, round });
+  fileBugsFromBaseline(taskId, ws, round, checks);
 
   // A check that could not be run is not the coder's fault and another round will not fix it.
   const broken = checks.filter((c) => c.status === 'error');
@@ -935,6 +949,53 @@ export async function reviewRound(taskId: string, round: number): Promise<void> 
 }
 
 /** The same check on the task's base commit, run once and remembered. */
+/**
+ * Run a bug card's failing check on the production commit. True: it still fails (or could not be
+ * run, and the agents look at it); false: it passes now, and the card is closed as not reproduced.
+ */
+async function reproduceCheckBug(taskId: string, repo: Project, check: { name: string; cmd: string; failure: string }): Promise<boolean> {
+  const cfg = getConfig();
+  const spec = checkSpecs(repo).find((s) => s.name === check.name) ?? { name: check.name as CheckSpec['name'], cmd: check.cmd };
+  const checkout = path.join(cfg.workspaceDir, taskId, `${repo.id}.repro`);
+  let result: CheckResult;
+  try {
+    const sha = productionSha(repo.localPath, repo.prodBranch);
+    createCheckout(repo.localPath, checkout, sha);
+    const deps = await depsForCheckout({ repoId: repo.id, taskId, ownerRepoPath: repo.localPath }, checkout, false);
+    if (!depsUsable(deps)) {
+      markReproduced(taskId, 'yes', `Could not run ${check.name} to reproduce it (${deps.detail}); the team looks at it instead.`);
+      return true;
+    }
+    result = await runCheck(spec, { workspacePath: checkout, scratchRoot: cfg.scratchDir, timeoutMs: cfg.checkTimeoutMs, memoryWaitMs: cfg.memoryWaitMs });
+  } catch (err) {
+    markReproduced(taskId, 'yes', `Could not run ${check.name} to reproduce it (${err instanceof Error ? err.message : String(err)}); the team looks at it instead.`);
+    return true;
+  } finally {
+    try { removeCheckout(repo.localPath, checkout); } catch { /* already gone */ }
+  }
+  if (getTask(taskId)?.state !== 'intake') return false; // stopped meanwhile
+  const stillFails = result.status === 'failed' || result.status === 'timeout';
+  const same = !check.failure || (result.failures ?? []).some((f) => failureKey(f) === failureKey(check.failure));
+  if (stillFails && same) {
+    markReproduced(taskId, 'yes', `Reproduced: ${check.name} still fails on ${repo.prodBranch}.`);
+    return true;
+  }
+  markReproduced(taskId, 'no', stillFails ? `${check.name} still fails on ${repo.prodBranch}, but not the way it did; closed.` : `Not reproduced: ${check.name} passes on ${repo.prodBranch} now. Nothing to fix; closed without starting an agent.`);
+  setTaskState(taskId, 'failed', getTask(taskId) ? (stillFails ? `Not reproduced the same way: ${check.name} fails differently now.` : `Not reproduced: ${check.name} passes on ${repo.prodBranch} now. Closed without starting an agent.`) : '');
+  return false;
+}
+
+/** Checks that fail on the base commit too were broken before this task: they become bug cards. */
+function fileBugsFromBaseline(taskId: string, ws: WorkspaceRow, round: number, checks: CheckResult[]): void {
+  const row = getDb().prepare('SELECT baseline_json FROM task_workspaces WHERE task_id = ? AND repo_id = ?').get(taskId, ws.repo_id) as { baseline_json: string | null } | undefined;
+  if (!row?.baseline_json) return;
+  try {
+    bugsFromChecks(taskId, ws.repo_id, round, checks, JSON.parse(row.baseline_json) as Record<string, CheckResult>);
+  } catch (err) {
+    console.warn(`[fryday-core] bugs from ${taskId}'s checks: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function baselineCheck(ws: WorkspaceRow, spec: CheckSpec): Promise<CheckResult> {
   const row = getDb().prepare('SELECT baseline_json FROM task_workspaces WHERE task_id = ? AND repo_id = ?').get(ws.task_id, ws.repo_id) as { baseline_json: string | null };
   const cache = row.baseline_json ? (JSON.parse(row.baseline_json) as Record<string, CheckResult>) : {};

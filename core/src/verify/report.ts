@@ -26,14 +26,21 @@ export interface VerifyReport {
   issues: Array<{ severity: 'blocking' | 'minor'; where: string; description: string; evidence: string }>;
   /** What the tester wanted to try and could not, and why. */
   notTested: string[];
+  /**
+   * Problems seen that this change did not cause (they are there without it too). Not part of the
+   * verdict: core may file each as a bug card of its own (pipeline/bugs.ts).
+   */
+  outOfScope?: OutOfScope[];
 }
+
+export interface OutOfScope { title: string; where: string; description: string; steps: string[]; evidence: string; severity: 'blocking' | 'minor' }
 
 const text = { type: 'string' } as const;
 
 export const VERIFY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['verdict', 'summary', 'criteria', 'issues', 'notTested'],
+  required: ['verdict', 'summary', 'criteria', 'issues', 'notTested', 'outOfScope'],
   properties: {
     verdict: { type: 'string', enum: ['pass', 'fail'] },
     summary: text,
@@ -56,6 +63,15 @@ export const VERIFY_SCHEMA = {
       },
     },
     notTested: { type: 'array', items: text },
+    outOfScope: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'where', 'description', 'steps', 'evidence', 'severity'],
+        properties: { title: text, where: text, description: text, steps: { type: 'array', items: text }, evidence: text, severity: { type: 'string', enum: ['blocking', 'minor'] } },
+      },
+    },
   },
 } as const;
 
@@ -68,6 +84,13 @@ export function parseVerifyReport(json: string | null): VerifyReport | null {
     if (!v['criteria'].every((c) => c && typeof c.criterion === 'string' && ['met', 'not_met', 'not_checked'].includes(c.result) && typeof c.evidence === 'string')) return null;
     if (!v['issues'].every((i) => i && (i.severity === 'blocking' || i.severity === 'minor') && typeof i.description === 'string' && typeof i.evidence === 'string' && typeof i.where === 'string')) return null;
     if (!v['notTested'].every((n) => typeof n === 'string')) return null;
+    // Older reports have no outOfScope; a malformed entry is dropped, never a reason to lose the report.
+    const extra = Array.isArray(v['outOfScope']) ? (v['outOfScope'] as Array<Record<string, unknown>>) : [];
+    v['outOfScope'] = extra.filter((o) => o && typeof o['description'] === 'string' && typeof o['where'] === 'string').map((o) => ({
+      title: typeof o['title'] === 'string' ? o['title'] : '', where: o['where'] as string, description: o['description'] as string,
+      steps: Array.isArray(o['steps']) ? (o['steps'] as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+      evidence: typeof o['evidence'] === 'string' ? o['evidence'] : '', severity: o['severity'] === 'blocking' ? 'blocking' : 'minor',
+    }));
     return v as unknown as VerifyReport;
   } catch {
     return null;

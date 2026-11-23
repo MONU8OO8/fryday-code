@@ -8,6 +8,7 @@ import { actorOfRole, ACTOR_NAME } from './plainWords.js';
 import { getTask, type Priority, type TaskRow } from './taskState.js';
 import { stateLabel, type TaskState } from './stateMachine.js';
 import { childrenOf, dependenciesOf, gateMet, unmetDependencies, type Gate } from './taskLinks.js';
+import { bugOf } from './bugs.js';
 
 export interface BoardFacts {
   priority: Priority;
@@ -24,6 +25,8 @@ export interface BoardFacts {
   parts: Array<{ id: string; title: string; state: string; label: string }>;
   /** The agent working on it now, if any. */
   agent: { runId: string; who: string; since: number } | null;
+  /** A bug card core filed from what an agent found (bugs.ts); null for a task the owner asked for. */
+  bug: { foundIn: string; foundBy: string; severity: 'blocking' | 'minor'; reproduced: 'yes' | 'no' | 'pending' | null } | null;
 }
 
 export function boardFacts(task: TaskRow): BoardFacts {
@@ -49,5 +52,14 @@ export function boardFacts(task: TaskRow): BoardFacts {
     children: kids.map((c) => c.id),
     parts: kids.map((c) => ({ id: c.id, title: c.title, state: c.state, label: stateLabel(c.state as TaskState) })),
     agent: run ? { runId: run.id, who: ACTOR_NAME[actorOfRole(run.role)], since: run.started_at } : null,
+    bug: bugFacts(task),
   };
+}
+
+const FOUND_BY: Record<string, string> = { check: 'Automatic checks', api_tester: 'App tester', ui_tester: 'Page tester' };
+
+function bugFacts(task: TaskRow): BoardFacts['bug'] {
+  if (task.origin !== 'bug') return null;
+  const b = bugOf(task);
+  return { foundIn: b?.foundIn.taskId ?? '', foundBy: FOUND_BY[b?.source ?? ''] ?? 'An agent', severity: b?.severity ?? 'minor', reproduced: b?.reproduced ?? null };
 }

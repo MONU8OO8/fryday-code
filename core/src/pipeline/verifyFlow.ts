@@ -38,6 +38,7 @@ import { startService, serviceUnreachableReason, type RunningService, type Servi
 import { apiTesterMcp, uiTesterMcp, removeRunMcp, findChrome, browserMarker, BROWSER_TOOL_PREFIX, SERVICE_REQUEST_TOOL, type RunMcp } from '../verify/tools.js';
 import { denyProxyPort, refusedSince } from '../verify/denyProxy.js';
 import { sweep, sweepBlocking, visitedPaths } from '../verify/sweep.js';
+import { bugsFromTester } from './bugs.js';
 import { grantsFor } from '../connections/store.js';
 import {
   VERIFY_SCHEMA, BROWSER_DIR, TESTER_NAME, TESTER_ROLE, emptyVerification, parseVerifyReport, reportPasses, verifyFeedback, verifySummary,
@@ -517,6 +518,8 @@ export function onTesterRunExit(host: VerifyHost, exit: RunExit, run: TesterRun)
       : Object.entries(tally).filter(([tool]) => tool.startsWith(BROWSER_TOOL_PREFIX)).reduce((n, [, count]) => n + count, 0);
     const passed = report !== null && calls > 0 && reportPasses(report);
     a.verification.testers.push({ kind, runId: exit.runId, report, calls, passed });
+    // What it saw that this change did not cause becomes a bug card of its own, if core's rules allow.
+    if (report?.outOfScope?.length && calls > 0) bugsFromTester(taskId, a.ws.repo_id, a.round, exit.runId, role, report.outOfScope);
     if (kind === 'ui') a.verification.refused = refusedSince(startedAt);
 
     if (!report) {

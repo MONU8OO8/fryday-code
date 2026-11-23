@@ -88,6 +88,13 @@ Or run the same demo locally with `npx fryday-code demo` (see [Install](#install
   which project calls which on the Graph page. Links it guessed from names stay dashed until you confirm
   them; your edits survive every rescan. Agents get a short map of the project and its neighbours
   instead of exploring the repository again.
+- **Files and fixes the bugs it finds.** A check that already fails on your production branch, or a
+  problem a tester sees that the task did not cause, becomes a bug card of its own (once per kind of
+  problem, at most three per task and five a day, Settings can change or switch it off). The scheduler
+  picks it up like any auto-start task. A bug from a failing check is run again on production first, and
+  closed without starting an agent when it passes now; the agents confirm any other bug before they
+  change code. The board filters bugs and shows who found each one, and where. Nothing a bug card does
+  is pushed or deployed without your yes.
 - **Spends fewer tokens.** Each project's code is indexed (keyword search with SQLite FTS5, search by
   meaning with a small embedding model that runs on your machine; no code leaves it). The Planner and the
   Builder are handed the code a task is about instead of exploring for it, a later Builder round starts

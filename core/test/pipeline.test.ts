@@ -857,3 +857,30 @@ test('a plan that changes pages in a project FryDay cannot open says so once, wi
   assert.equal(await runToRest(plain), 'awaiting_approval');
   assert.equal(listMessages(plain).filter((m) => m.author === 'fryday' && m.kind === 'reply').length, 0, 'no pages, nothing said');
 });
+
+test('a bug from a failing check is run again on production first: when it passes now, the card closes without any agent', { skip }, async () => {
+  const { fileBug, bugOf } = await import('../src/pipeline/bugs');
+  script({ coder: [good] });
+  const from = addTask('Something else');
+  const filed = fileBug({
+    projectId: REPO, title: 'The add test already fails', summary: 'node --test fails on production.', steps: ['Run node --test'], evidence: 'add',
+    severity: 'blocking', source: 'check', signature: 'check:test:add', foundIn: { taskId: from, round: 1 }, check: { name: 'test', cmd: 'node --test', failure: "add" },
+  });
+  assert.ok(filed.filed);
+  const id = filed.filed ? filed.taskId : '';
+  const before = calls().length;
+  startTask(id, REPO);
+  await waitUntil('the reproduce step', () => getTask(id)!.state === 'failed' || calls().length > before, 60_000);
+  assert.equal(getTask(id)!.state, 'failed');
+  assert.match(note(id), /^Not reproduced: test passes on .+ now\. Closed without starting an agent\./);
+  assert.equal(calls().length, before, 'no agent was started');
+  assert.equal(bugOf(getTask(id)!)!.reproduced, 'no');
+});
+
+test('a test that tried to open a port in the check sandbox gets the reason in the feedback, not just the error', async () => {
+  const { coderFeedback, NO_PORTS_HINT } = await import('../src/pipeline/review');
+  const failing = (output: string) => ({ name: 'test' as const, cmd: 'npm test', status: 'failed' as const, exitCode: 1, durationMs: 1, output });
+  assert.ok(coderFeedback(2, [failing("error: 'listen EPERM: operation not permitted 127.0.0.1'")], [], null).includes(NO_PORTS_HINT));
+  assert.ok(coderFeedback(2, [failing("error: 'server did not start'")], [], null).includes(NO_PORTS_HINT));
+  assert.ok(!coderFeedback(2, [failing('expected 5, got 6')], [], null).includes(NO_PORTS_HINT), 'an ordinary failure gets no such note');
+});

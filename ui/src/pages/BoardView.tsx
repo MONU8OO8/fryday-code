@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
-import { ArrowDown, ArrowUp, Layers, Link2, Play, Plus, Search, WifiOff, Zap } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bug, Layers, Link2, Play, Plus, Search, WifiOff, Zap } from 'lucide-react';
 import { useCoreApi, useSse } from '../hooks/useSse';
 import { useThrottle } from '../hooks/useThrottle';
 import type { Actor, BoardColumn, OverviewItem, Priority } from '../storyTypes';
@@ -53,6 +53,7 @@ export default function BoardView() {
   const [query, setQuery] = useState('');
   const [project, setProject] = useState('');
   const [priority, setPriority] = useState<Priority | ''>('');
+  const [kind, setKind] = useState<'' | 'bugs' | 'mine'>('');
   const load = useCallback(() => api.get('/tasks/overview').then((d) => { setTasks(d.tasks); setFailed(false); }).catch(() => setFailed(true)), []);
   useEffect(() => { void load(); }, [load]);
   const refresh = useThrottle(() => void load(), 1500);
@@ -72,7 +73,8 @@ export default function BoardView() {
   const matches = (t: OverviewItem) =>
     (!query || `${t.id} ${t.title}`.toLowerCase().includes(query.toLowerCase()))
     && (!project || t.projectName === project)
-    && (!priority || priorityOf(t) === priority);
+    && (!priority || priorityOf(t) === priority)
+    && (!kind || (kind === 'bugs') === !!t.board?.bug);
   const recent = (t: OverviewItem) => t.group !== 'done' || Date.now() - t.updatedAt < WEEK;
   const shown = all.filter((t) => matches(t) && recent(t));
   const byId = new Map(all.map((t) => [t.id, t]));
@@ -91,6 +93,7 @@ export default function BoardView() {
   const start = (id: string) => void act(() => api.post(`/tasks/${encodeURIComponent(id)}/start`, {}));
 
   const open = all.filter((t) => t.group !== 'done' && t.board?.kind !== 'initiative').length;
+  const bugCount = all.filter((t) => t.board?.bug && t.group !== 'done').length;
   const needYou = all.filter((t) => t.group === 'needs_you' && t.board?.kind !== 'initiative').length;
 
   return (
@@ -115,6 +118,13 @@ export default function BoardView() {
           <select aria-label="Priority" value={priority} onChange={(e) => setPriority(e.target.value as Priority | '')} className={controlClass()}>
             <option value="">All priorities</option>
             {(Object.keys(PRIORITY) as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY[p].label}</option>)}
+          </select>
+        </div>
+        <div className="w-40">
+          <select aria-label="Kind" value={kind} onChange={(e) => setKind(e.target.value as '' | 'bugs' | 'mine')} className={controlClass()}>
+            <option value="">All cards</option>
+            <option value="bugs">Bugs FryDay found{bugCount ? ` (${bugCount})` : ''}</option>
+            <option value="mine">Your tasks</option>
           </select>
         </div>
         {error && <p role="alert" className="text-sm text-hud-red">{error}</p>}
@@ -179,6 +189,7 @@ function TaskCard({ item: t, backlog, canUp, canDown, onMove, onBoard, onStart }
     <li className={clsx('rounded-xl border bg-hud-surface px-3 py-2.5 shadow-card', t.group === 'needs_you' ? 'border-hud-amber/40' : 'border-hud-border')}>
       <div className="flex items-start gap-1.5">
         <Badge tone={p.tone} className="flex-shrink-0">{p.label}</Badge>
+        {b?.bug && <span title="A bug FryDay found and filed" className="flex-shrink-0 mt-0.5 text-hud-red"><Bug aria-label="Bug" className="w-3.5 h-3.5" /></span>}
         <Link to={`/home/${t.id}`} className="min-w-0 flex-1 text-sm font-semibold leading-snug line-clamp-2 hover:text-hud-cyan focus-visible:outline-none focus-visible:underline">
           {t.title}
         </Link>
@@ -190,6 +201,14 @@ function TaskCard({ item: t, backlog, canUp, canDown, onMove, onBoard, onStart }
         {b?.parent && <Link to={`/home/${b.parent.id}`} title={b.parent.title} className="inline-flex items-center gap-0.5 text-hud-cyan"><Layers aria-hidden className="w-3 h-3" />{b.parent.id}</Link>}
         {b?.autoStart && backlog && <span className="inline-flex items-center gap-0.5 text-hud-green"><Zap aria-hidden className="w-3 h-3" />auto</span>}
       </div>
+      {b?.bug && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="text-hud-dim">Found by {b.bug.foundBy}{b.bug.foundIn ? <> in <Link to={`/home/${b.bug.foundIn}`} className="text-hud-cyan">{b.bug.foundIn}</Link></> : null}</span>
+          {b.bug.reproduced === 'yes' && <span className="rounded-full border border-hud-red/30 px-1.5 py-0.5 text-hud-red">reproduced</span>}
+          {b.bug.reproduced === 'no' && <span className="rounded-full border border-hud-green/30 px-1.5 py-0.5 text-hud-green">not reproduced</span>}
+          {b.bug.reproduced === 'pending' && <span className="rounded-full border border-hud-border px-1.5 py-0.5 text-hud-dim">to reproduce</span>}
+        </div>
+      )}
       {b && b.dependsOn.length > 0 && (
         <ul aria-label="Waits for" className="mt-1.5 flex flex-wrap gap-1">
           {b.dependsOn.map((d) => (
