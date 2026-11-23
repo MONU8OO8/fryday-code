@@ -83,7 +83,7 @@ export default function SetupView() {
         })}
       </div>
       <div className="flex flex-wrap gap-4 text-sm">
-        <Link to="/setup/activity" className="font-medium text-hud-cyan hover:underline">Agent activity</Link>
+        <Link to="/agents" className="font-medium text-hud-cyan hover:underline">Agents</Link>
         <Link to="/setup/console" className="font-medium text-hud-cyan hover:underline">Talk to FryDay (console)</Link>
       </div>
     </div>

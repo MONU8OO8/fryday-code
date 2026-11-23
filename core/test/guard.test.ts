@@ -35,6 +35,26 @@ test('tools outside the role policy are refused', () => {
   assert.equal(allowed('Agent', { prompt: 'x' }), false);
 });
 
+test('roles without tools are refused every call, even when their policy file lists tools', () => {
+  for (const role of ['reflector', 'fryday', 'system']) {
+    const wrong = { role, allowedTools: ['Read', 'Bash', 'Write'], readRoots: [wt], writeRoots: [wt], mcp: { mcp__x__y: { check: 'none' } } };
+    for (const [tool, input] of [['Read', { file_path: path.join(wt, 'src', 'a.ts') }], ['Bash', { command: 'ls' }], ['Write', { file_path: path.join(wt, 'x.ts'), content: 'x' }], ['mcp__x__y', {}]] as const) {
+      const d = decide(wrong, tool, input, wt);
+      assert.equal(d.allow, false, `${role} ${tool}`);
+    }
+  }
+  const answering = { role: 'reflector', allowedTools: ['StructuredOutput'], readRoots: [] as string[], writeRoots: [] as string[] };
+  assert.equal(decide(answering, 'Read', { file_path: path.join(wt, 'src', 'a.ts') }, wt).allow, false);
+  assert.equal(decide(answering, 'StructuredOutput', { lessons: [] }, wt).allow, true, 'its final answer in the required shape');
+  assert.equal(decide({ ...answering, allowedTools: [] }, 'StructuredOutput', {}, wt).allow, false, 'only when the run was given a schema');
+});
+
+test('the policy names the same roles without tools as the hook', async () => {
+  const { ROLE_POLICIES, NO_TOOL_ROLES } = await import('../src/guard/policy');
+  for (const role of NO_TOOL_ROLES) assert.deepEqual(ROLE_POLICIES[role].allowedTools, [], role);
+  assert.equal(ROLE_POLICIES.reflector.mayUseMcp, false);
+});
+
 test('reads stay inside the workspace', () => {
   assert.equal(allowed('Read', { file_path: path.join(wt, 'src', 'a.ts') }), true);
   assert.equal(allowed('Read', { file_path: 'src/a.ts' }), true);

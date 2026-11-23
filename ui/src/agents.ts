@@ -3,7 +3,7 @@
  * colour and icon. One place, so the flow, the Agents page and Settings agree.
  */
 
-import { FileSearch, ClipboardList, CodeXml, ListChecks, Eye, ServerCog, Monitor, User, Rocket, MessageCircle, Wrench, GitMerge, type LucideIcon } from 'lucide-react';
+import { FileSearch, ClipboardList, CodeXml, ListChecks, Eye, ServerCog, Monitor, User, Rocket, MessageCircle, Wrench, GitMerge, Lightbulb, type LucideIcon } from 'lucide-react';
 
 export interface AgentLook {
   name: string;
@@ -27,6 +27,7 @@ export const AGENT_LOOK: Record<string, AgentLook> = {
   release:    { name: 'Releaser',     job: 'push and merge into staging',    color: '#6366f1', icon: GitMerge },
   deploy:     { name: 'Deploy',       job: 'Jenkins deploys staging',        color: '#65a30d', icon: Rocket },
   fryday:     { name: 'FryDay',       job: 'answers you in chat',            color: '#4f46e5', icon: MessageCircle },
+  reflector:  { name: 'Reflector',    job: 'proposes lessons after a task',  color: '#a855f7', icon: Lightbulb },
   system:     { name: 'System',       job: 'small internal runs',            color: '#64748b', icon: Wrench },
 };
 

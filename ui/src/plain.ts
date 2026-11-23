@@ -24,7 +24,7 @@ export const STOPS: Array<{ id: StopId; name: string; icon: string }> = [
   { id: 'live', name: 'Live', icon: '🚀' },
 ];
 
-export const GROUP_TITLE: Record<TaskGroup, string> = { needs_you: 'Needs you', working: 'Agents working', done: 'Done this week' };
+export const GROUP_TITLE: Record<TaskGroup, string> = { needs_you: 'Needs you', working: 'Agents working', waiting: 'Waiting to start', done: 'Done this week' };
 
 export function ago(ms: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));

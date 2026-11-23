@@ -1,78 +1,127 @@
 /**
- * Activity: who is working now and on what, where the tokens went by agent, and every
- * recent run.
+ * Agents: one lane per agent. "Now" is what it is doing this moment (kept current from the
+ * live event stream), "Recent" its last runs, each opening the run drawer, and its scorecard
+ * for the last 7 and 30 days. Below, where the tokens went by agent.
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Square, Gauge, Cpu } from 'lucide-react';
 import clsx from 'clsx';
 import { useSse, useCoreApi } from '../hooks/useSse';
 import { toolLabel } from '../hooks/useRunActivity';
-import { Badge, Button, Card, EmptyState, PageHeader, Section, type BadgeTone } from '../ui';
+import { Badge, Button, Card, EmptyState, PageHeader } from '../ui';
 import { look, fmtTokens, countedTokens, fmtDuration, modelName } from '../agents';
-import { TokenBar, ClockBar, RunTokenBar } from '../components/Meters';
+import RunDrawer from '../components/RunDrawer';
+import ScoreStrip from '../components/ScoreStrip';
+import { RUN_STATE, type Lane, type LaneRun } from '../runTypes';
 
 interface Usage { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
-interface AgentRun {
-  id: string;
-  task_id: string | null;
-  role: string;
-  round: number;
-  state: string;
-  model: string | null;
-  started_at: number;
-  ended_at: number | null;
-  deadline_at: number | null;
-  /** Most counted tokens this run may use. */
-  token_limit: number | null;
-  /** The engine it ran on: claude, or cursor (reduced isolation, uses the Cursor plan). */
-  engine?: string;
-  is_active: boolean;
-  error_msg: string | null;
-  usage: Usage;
-  last: { text: string; tools: string[]; toolInputs: string[] } | null;
-}
 interface RoleUsage extends Usage { role: string; runs: number; budgetStops: number; model: string | null }
 
-const STATE: Record<string, { label: string; tone: BadgeTone }> = {
-  completed: { label: 'Done', tone: 'ok' },
-  failed: { label: 'Failed', tone: 'bad' },
-  killed: { label: 'Stopped', tone: 'warn' },
-  budget: { label: 'Token limit', tone: 'warn' },
-  timeout: { label: 'Time limit', tone: 'bad' },
-  running: { label: 'Finishing', tone: 'neutral' },
+const LANE_NAME: Record<string, { name: string; job: string }> = {
+  fryday: { name: 'Lead', job: 'FryDay: talks with you and keeps the board' },
 };
+const laneLook = (role: string) => ({ ...look(role), ...LANE_NAME[role] });
+const RECENT_SHOWN = 6;
 
-function LiveCard({ run, onKill }: { run: AgentRun; onKill: () => void }) {
-  const l = look(run.role);
-  const Icon = l.icon;
-  const step = run.last;
-  const doing = step ? (step.tools.length ? step.tools.map((t, i) => [toolLabel(t), step.toolInputs[i]].filter(Boolean).join(' · ')).join('  ') : step.text.split('\n')[0]) : 'starting…';
+function doingNow(run: LaneRun): string {
+  const n = run.now;
+  if (!n) return 'Starting…';
+  if (n.tool) return [n.tool, n.hint].filter(Boolean).join(' · ');
+  return n.text.split('\n')[0] || 'Thinking…';
+}
+
+function LiveRun({ run, color, now, onOpen, onKill }: { run: LaneRun; color: string; now: number; onOpen: () => void; onKill: () => void }) {
+  const doing = doingNow(run);
+  const share = run.limit ? Math.min(run.tokens / run.limit, 1) : null;
   return (
-    <Card padding="sm" className="flow-in border-hud-cyan/40 p-4">
-      <div className="mb-3 flex items-center gap-3">
-        <span className="relative flex h-9 w-9 items-center justify-center rounded-full" style={{ background: `${l.color}22`, color: l.color }}>
-          <span aria-hidden className="absolute inset-0 animate-ping rounded-full opacity-20 motion-reduce:animate-none" style={{ background: l.color }} />
+    <div className="flow-in rounded-xl border border-hud-cyan/40 bg-hud-bg p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs">
+        <span aria-hidden className="h-2 w-2 animate-pulse rounded-full motion-reduce:animate-none" style={{ background: color }} />
+        {run.taskId ? <Link to={`/tasks/${run.taskId}`} className="font-mono text-hud-cyan hover:underline">{run.taskId}</Link> : <span className="text-hud-dim">Chat</span>}
+        {run.round > 0 && <span className="text-hud-dim">round {run.round}</span>}
+        <span className="min-w-0 flex-1 truncate text-hud-dim">{run.taskTitle}</span>
+        <span className="tabular-nums text-hud-dim">{fmtDuration(now - run.startedAt)}</span>
+      </div>
+      <button type="button" onClick={onOpen} title={doing}
+        className="mb-2 block w-full truncate rounded-lg border border-hud-border bg-hud-surface px-2.5 py-1.5 text-left font-mono text-xs text-hud-bright hover:border-hud-cyan/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
+        <span key={doing} className="flow-in">{doing}</span>
+      </button>
+      <div className="flex items-center gap-2">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-hud-border/60" role="meter" aria-label="Tokens against the limit"
+          aria-valuemin={0} aria-valuemax={run.limit ?? undefined} aria-valuenow={run.tokens}>
+          <div className={clsx('h-full rounded-full transition-all duration-700', share !== null && share > 0.85 ? 'bg-hud-amber' : 'bg-hud-cyan')} style={{ width: `${(share ?? 0) * 100}%` }} />
+        </div>
+        <span className="text-[11px] tabular-nums text-hud-dim">{fmtTokens(run.tokens)}{run.limit ? ` / ${fmtTokens(run.limit)}` : ''}</span>
+        <Button size="sm" variant="ghost" onClick={onOpen}>Open</Button>
+        <Button size="sm" variant="danger" onClick={onKill} title="Stop this agent" icon={<Square className="h-3 w-3" aria-hidden />}>Stop</Button>
+      </div>
+    </div>
+  );
+}
+
+function RecentRun({ run, onOpen }: { run: LaneRun; onOpen: () => void }) {
+  const s = RUN_STATE[run.state] ?? { label: run.state, tone: 'neutral' as const };
+  return (
+    <li>
+      <button type="button" onClick={onOpen}
+        className="grid w-full grid-cols-[4.5rem_1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-hud-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
+        <span className="font-mono text-hud-cyan">{run.taskId ?? 'Chat'}{run.round > 0 ? <span className="text-hud-dim"> r{run.round}</span> : null}</span>
+        <span className="truncate text-hud-bright">{run.taskTitle ?? ''}</span>
+        <span className="flex items-center gap-2">
+          <Badge tone={s.tone}>{s.label}</Badge>
+          <span className="w-10 text-right tabular-nums text-hud-dim">{fmtTokens(run.tokens)}</span>
+          <span className="w-12 text-right tabular-nums text-hud-dim">{run.endedAt ? fmtDuration(run.endedAt - run.startedAt) : ''}</span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function LaneCard({ lane, now, onOpen, onKill }: { lane: Lane; now: number; onOpen: (runId: string) => void; onKill: (run: LaneRun) => void }) {
+  const [all, setAll] = useState(false);
+  const l = laneLook(lane.role);
+  const Icon = l.icon;
+  const recent = all ? lane.recent : lane.recent.slice(0, RECENT_SHOWN);
+  return (
+    <Card padding="none" className={clsx('overflow-hidden', lane.live.length > 0 && 'border-hud-cyan/40')}>
+      <div className="flex items-center gap-3 border-b border-hud-border px-4 py-3">
+        <span className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full" style={{ background: `${l.color}22`, color: l.color }}>
+          {lane.live.length > 0 && <span aria-hidden className="absolute inset-0 animate-ping rounded-full opacity-20 motion-reduce:animate-none" style={{ background: l.color }} />}
           <Icon aria-hidden className="relative h-4 w-4" />
         </span>
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-hud-bright">{l.name}{run.round > 0 && <span className="font-normal text-hud-dim"> · round {run.round}</span>}</div>
-          <div className="text-xs text-hud-dim">
-            {run.task_id ? <Link to={`/tasks/${run.task_id}`} className="font-mono text-hud-cyan hover:underline">{run.task_id}</Link> : 'Chat'} · {run.engine === 'cursor' ? `Cursor ${run.model ?? ''}` : modelName(run.model) || 'starting'}
-            {run.engine === 'cursor' && <span className="text-hud-amber"> · reduced isolation</span>}
-          </div>
+          <h2 className="text-sm font-semibold text-hud-bright">{l.name}</h2>
+          <p className="truncate text-xs text-hud-dim">{l.job}</p>
         </div>
-        <Button size="sm" variant="danger" className="ml-auto" onClick={onKill} title="Stop this agent" icon={<Square className="h-3 w-3" aria-hidden />}>Stop</Button>
+        <Badge className="ml-auto" tone={lane.live.length ? 'accent' : 'neutral'} dot={lane.live.length > 0}>
+          {lane.live.length ? `${lane.live.length} working` : 'Idle'}
+        </Badge>
       </div>
-      <div key={doing} className="flow-in mb-3 truncate rounded-lg border border-hud-border bg-hud-bg px-2.5 py-1.5 font-mono text-xs text-hud-bright" title={doing}>
-        <span aria-hidden className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-hud-cyan align-middle motion-reduce:animate-none" />{doing}
+      <div className="grid gap-4 p-4 lg:grid-cols-2">
+        <section aria-label={`${l.name} now`}>
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-hud-dim">Now</h3>
+          {lane.live.length === 0
+            ? <p className="text-xs text-hud-dim">Not working on anything.</p>
+            : <div className="space-y-2">{lane.live.map((r) => <LiveRun key={r.runId} run={r} color={l.color} now={now} onOpen={() => onOpen(r.runId)} onKill={() => onKill(r)} />)}</div>}
+        </section>
+        <section aria-label={`${l.name} recent runs`}>
+          <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-hud-dim">Recent</h3>
+          {lane.recent.length === 0 ? <p className="text-xs text-hud-dim">No runs yet.</p> : (
+            <>
+              <ul className="-mx-2">{recent.map((r) => <RecentRun key={r.runId} run={r} onOpen={() => onOpen(r.runId)} />)}</ul>
+              {lane.recent.length > RECENT_SHOWN && (
+                <button type="button" onClick={() => setAll(!all)} className="mt-1 text-xs font-semibold text-hud-cyan hover:underline">
+                  {all ? 'Show fewer' : `Show all ${lane.recent.length}`}
+                </button>
+              )}
+            </>
+          )}
+        </section>
       </div>
-      <div className="space-y-2">
-        <TokenBar usage={run.usage} />
-        <ClockBar startedAt={run.started_at} deadlineAt={run.deadline_at} />
-        {run.token_limit !== null && run.engine !== 'cursor' && <RunTokenBar usage={run.usage} limit={run.token_limit} />}
-        {run.engine === 'cursor' && <div className="text-xs text-hud-dim">Uses your Cursor plan. Tokens are known when it finishes. Read-only, on a throwaway copy.</div>}
+      <div className="border-t border-hud-border px-4 py-3">
+        <ScoreStrip role={lane.role} card={lane.scorecard} />
       </div>
     </Card>
   );
@@ -101,7 +150,7 @@ function ByRole({ roles, days, setDays }: { roles: RoleUsage[]; days: number; se
       {roles.length === 0 && <p className="text-sm text-hud-dim">No agent ran in this time.</p>}
       <div className="space-y-3">
         {roles.map((r) => {
-          const l = look(r.role);
+          const l = laneLook(r.role);
           const Icon = l.icon;
           const tokens = countedTokens(r);
           return (
@@ -126,82 +175,81 @@ function ByRole({ roles, days, setDays }: { roles: RoleUsage[]; days: number; se
           );
         })}
       </div>
-      <p className="mt-3 text-xs text-hud-dim">Tokens are input, output and cache writes; context reused from earlier turns is shown apart and does not count toward a limit. Models and token limits per agent are on the Agents page.</p>
+      <p className="mt-3 text-xs text-hud-dim">Tokens are input, output and cache writes; context reused from earlier turns is shown apart and does not count toward a limit. Models and token limits per agent are in Setup.</p>
     </Card>
   );
 }
 
 export default function AgentsView() {
-  const [agents, setAgents] = useState<AgentRun[]>([]);
+  const [lanes, setLanes] = useState<Lane[]>([]);
   const [roles, setRoles] = useState<RoleUsage[]>([]);
   const [days, setDays] = useState(7);
+  const [open, setOpen] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const api = useCoreApi();
   const timer = useRef<number | null>(null);
 
   const refresh = () => {
-    api.get('/agents').then((d) => setAgents(d.agents ?? [])).catch(() => {});
-    api.get(`/usage/by-role?days=${days}`).then((d) => setRoles(d.roles ?? [])).catch(() => {});
+    api.get('/agents/roles').then((d) => { setLanes(Array.isArray(d?.lanes) ? d.lanes : []); setFailed(false); }).catch(() => setFailed(true));
   };
   const refreshSoon = () => {
     if (timer.current !== null) return;
     timer.current = window.setTimeout(() => { timer.current = null; refresh(); }, 800);
   };
-  useEffect(() => { refresh(); }, [days]);
+  useEffect(() => { refresh(); }, []);
+  useEffect(() => { api.get(`/usage/by-role?days=${days}`).then((d) => setRoles(d?.roles ?? [])).catch(() => {}); }, [days]);
   useEffect(() => () => { if (timer.current !== null) clearTimeout(timer.current); }, []);
+
+  const working = lanes.reduce((n, l) => n + l.live.length, 0);
+  useEffect(() => {
+    if (working === 0) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [working]);
+
   useSse('/api/events', (ev) => {
-    if (['run_started', 'run_event', 'run_exit'].includes(ev['type'] as string)) refreshSoon();
+    const type = ev['type'];
+    if (type === 'run_started' || type === 'run_exit') { refreshSoon(); return; }
+    if (type !== 'run_event' || ev['kind'] !== 'assistant') return;
+    const runId = ev['runId'];
+    const tools = (ev['tools'] as string[] | undefined) ?? [];
+    const inputs = (ev['toolInputs'] as string[] | undefined) ?? [];
+    const step = { tool: tools.length ? toolLabel(tools[tools.length - 1]!) : null, hint: inputs[inputs.length - 1] ?? '', text: String(ev['text'] ?? '').slice(0, 280) };
+    let known = false;
+    setLanes((prev) => prev.map((lane) => {
+      if (!lane.live.some((r) => r.runId === runId)) return lane;
+      known = true;
+      return { ...lane, live: lane.live.map((r) => (r.runId === runId ? { ...r, now: step } : r)) };
+    }));
+    if (!known) refreshSoon();
   });
 
-  const kill = async (run: AgentRun) => {
-    if (!window.confirm(`Stop the ${look(run.role).name}${run.task_id ? ` on ${run.task_id}` : ''}? The task is handed back to you.`)) return;
-    await api.post(`/agents/${run.id}/kill`, {});
+  const kill = async (run: LaneRun, who: string) => {
+    if (!window.confirm(`Stop the ${who}${run.taskId ? ` on ${run.taskId}` : ''}? The task is handed back to you.`)) return;
+    await api.post(`/agents/${run.runId}/kill`, {});
     refresh();
   };
-  const live = agents.filter((a) => a.is_active);
-  const past = agents.filter((a) => !a.is_active);
+  const close = useCallback(() => setOpen(null), []);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
-      <PageHeader title="Activity" subtitle={live.length > 0 ? `${live.length} agent${live.length === 1 ? '' : 's'} working now.` : 'No agent is working now.'} />
+    <div className="mx-auto max-w-6xl space-y-4 p-4 md:p-6">
+      <PageHeader title="Agents"
+        subtitle={working > 0 ? `${working} agent${working === 1 ? '' : 's'} working now. Open any run to see each step it took.` : 'No agent is working now. Open any run to see each step it took.'} />
+      <p className="text-xs text-hud-dim">Each figure: the last 7 days, and on the right the last 30. An arrow shows the week doing better or worse than the month.</p>
 
-      <Section title="Working now">
-        {live.length === 0
-          ? <Card><EmptyState compact icon={<Cpu className="h-5 w-5" />} title="No agent is working" text="Give FryDay a task from Home, or talk to it in the console."
-              action={<><Link to="/home/new" className="text-sm font-semibold text-hud-cyan hover:underline">New task</Link><Link to="/setup/console" className="text-sm font-semibold text-hud-cyan hover:underline">Open the console</Link></>} /></Card>
-          : <div className="grid gap-3 md:grid-cols-2">{live.map((r) => <LiveCard key={r.id} run={r} onKill={() => void kill(r)} />)}</div>}
-      </Section>
+      {failed && <p role="alert" className="text-sm text-hud-red">Could not load the agents. Is FryDay running?</p>}
+      {!failed && lanes.length === 0 && (
+        <Card><EmptyState compact icon={<Cpu className="h-5 w-5" />} title="No agent has run yet" text="Put a task on the board, or talk to FryDay in the console."
+          action={<><Link to="/home/new" className="text-sm font-semibold text-hud-cyan hover:underline">New task</Link><Link to="/setup/console" className="text-sm font-semibold text-hud-cyan hover:underline">Open the console</Link></>} /></Card>
+      )}
+
+      <div className="space-y-3">
+        {lanes.map((lane) => <LaneCard key={lane.role} lane={lane} now={now} onOpen={setOpen} onKill={(r) => void kill(r, laneLook(lane.role).name)} />)}
+      </div>
 
       <ByRole roles={roles} days={days} setDays={setDays} />
-
-      <Section title="Recent runs">
-        {past.length === 0 ? <p className="text-sm text-hud-dim">No runs yet.</p> : (
-          <Card padding="none" className="divide-y divide-hud-border">
-            {past.map((run) => {
-              const l = look(run.role);
-              const Icon = l.icon;
-              const s = STATE[run.state] ?? { label: run.state, tone: 'neutral' as BadgeTone };
-              return (
-                <div key={run.id} className="grid grid-cols-[1.5rem_8rem_5rem_1fr_auto] items-center gap-2 px-4 py-2.5 text-xs">
-                  <Icon aria-hidden className="h-4 w-4" style={{ color: l.color }} />
-                  <span className="truncate text-sm text-hud-bright">{l.name}{run.round > 0 ? ` r${run.round}` : ''}</span>
-                  {run.task_id ? <Link to={`/tasks/${run.task_id}`} className="font-mono text-hud-cyan hover:underline">{run.task_id}</Link> : <span className="text-hud-dim">Chat</span>}
-                  <div className="min-w-0">
-                    <TokenBar usage={run.usage} compact />
-                    {run.error_msg && run.state !== 'completed' && <div className="mt-0.5 truncate text-hud-red" title={run.error_msg}>{run.error_msg}</div>}
-                  </div>
-                  <div className="flex items-center justify-end gap-2">
-                    <Badge tone={s.tone}>{s.label}</Badge>
-                    <span className="w-14 text-right tabular-nums text-hud-dim">{fmtDuration((run.ended_at ?? Date.now()) - run.started_at)}</span>
-                    {run.engine === 'cursor'
-                      ? <span className="w-14 text-right text-hud-dim" title="Uses your Cursor plan">Cursor</span>
-                      : <span className="w-14 text-right tabular-nums text-hud-bright" title="tokens">{fmtTokens(countedTokens(run.usage))}</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </Card>
-        )}
-      </Section>
+      <RunDrawer runId={open} onClose={close} />
     </div>
   );
 }

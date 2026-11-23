@@ -1,7 +1,7 @@
 // The six stops of the journey line, grouped from the flow model.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { journeyOf, groupOf, overviewLine } from '../src/pipeline/journey';
+import { journeyOf, groupOf, overviewLine, columnOf, journeyOfInitiative, initiativeLine } from '../src/pipeline/journey';
 import { FLOW_ORDER, type TaskFlow, type FlowNodeId, type FlowNodeState, type FlowEdge } from '../src/pipeline/flow';
 
 const zero = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
@@ -63,7 +63,7 @@ test('tasks are grouped and described in one plain line', () => {
   assert.equal(groupOf('awaiting_approval'), 'needs_you');
   assert.equal(groupOf('needs_owner'), 'needs_you');
   assert.equal(groupOf('coding'), 'working');
-  assert.equal(groupOf('queued'), 'working');
+  assert.equal(groupOf('queued'), 'waiting');
   assert.equal(groupOf('deployed'), 'done');
   assert.equal(groupOf('failed'), 'done');
   const building = journeyOf(flow({ coder: 'active' }, 'coder'), 'coding');
@@ -114,4 +114,25 @@ test('the successful endings that leave the task with the owner read as finished
   assert.equal(groupOf('awaiting_approval', null), 'needs_you');
   assert.equal(groupOf('needs_owner', null), 'needs_you');
   assert.equal(overviewLine('needs_owner', deploy, null), 'Stopped: needs you');
+});
+
+test('the board column follows the journey, and anything waiting on the owner is in Needs you', () => {
+  const coding = journeyOf(flow({ analyst: 'done', planner: 'done', coder: 'active' }, 'coder'), 'coding');
+  assert.equal(columnOf('coding', coding), 'build');
+  assert.equal(columnOf('queued', journeyOf(flow({}, null), 'queued')), 'backlog');
+  assert.equal(columnOf('awaiting_approval', coding), 'needs_you');
+  assert.equal(columnOf('needs_owner', coding, 'on_staging_no_deploy'), 'done', 'a successful ending left with the owner is done');
+  assert.equal(columnOf('deployed', coding), 'done');
+  assert.equal(columnOf('intake', journeyOf(flow({ analyst: 'active' }, 'analyst'), 'intake')), 'understand');
+});
+
+test("an initiative's line is made of its parts' lines", () => {
+  const building = journeyOf(flow({ analyst: 'done', planner: 'done', coder: 'active' }, 'coder'), 'coding');
+  const understanding = journeyOf(flow({ analyst: 'active' }, 'analyst'), 'intake');
+  const j = journeyOfInitiative([building, understanding], 'tracking');
+  assert.equal(j.current, 'understand', 'the part furthest behind is where the initiative is');
+  assert.equal(states(j), 'understand:active plan:idle build:active check:idle approve:idle live:idle');
+  assert.equal(initiativeLine('tracking', { total: 2, done: 1, stopped: 0, needYou: 0 }), '1 of 2 parts on staging');
+  assert.equal(initiativeLine('tracking', { total: 3, done: 1, stopped: 0, needYou: 2 }), '2 parts need you · 1 of 3 done');
+  assert.equal(initiativeLine('deployed', { total: 2, done: 2, stopped: 0, needYou: 0 }), 'Done: all 2 parts on staging');
 });

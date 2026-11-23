@@ -203,6 +203,32 @@ function notice(text: string): void {
 
 const now = () => Date.now();
 const FIXTURES: Record<string, () => Json> = {
+  // The sample project as the scan would read it: one service with no neighbours.
+  '/graph': () => ({
+    projects: [{ id: 'sample-shop', name: 'sample-shop', scan: { sha: '0000000000000000000000000000000000000000', scannedAt: now(), error: null, truncated: false } }],
+    services: [{ id: 'project:sample-shop', kind: 'project', projectId: 'sample-shop', label: 'sample-shop', source: 'scan', confidence: 1, confirmed: false }],
+    links: [],
+    keys: [],
+  }),
+  '/graph/projects/sample-shop': () => ({
+    projectId: 'sample-shop', scan: { sha: '0000000000000000000000000000000000000000', scannedAt: now(), error: null, truncated: false },
+    frameworks: [], exposes: [], calls: [], calledBy: [], keys: [],
+  }),
+  // What the learning page looks like once a few tasks have run: one lesson waiting, one in use.
+  '/lessons': () => ({
+    proposed: [{
+      id: 2, projectId: 'sample-shop', role: 'coder', source: 'reflector', state: 'proposed', uses: 0, helped: 0, hurt: 0, createdAt: now() - 3_600_000, decidedAt: null, suggestRetire: false,
+      text: 'When you change a price calculation, add a test with a discount of zero and one at the maximum; both were missed before.',
+      evidence: [{ taskId: TASK.id, round: 1, what: 'Checker: criterion not met: zero discount leaves the total unchanged' }],
+    }],
+    active: [{
+      id: 1, projectId: null, role: 'planner', source: 'reflector', state: 'active', uses: 4, helped: 3, hurt: 0, createdAt: now() - 6 * 86_400_000, decidedAt: now() - 5 * 86_400_000, suggestRetire: false,
+      text: 'Name the exact test command in the plan; tasks without one were sent back for a missing test run.',
+      evidence: [],
+    }],
+    retired: [],
+    projects: { 'sample-shop': 'sample-shop' },
+  }),
   '/connections': () => ({
     checkedAt: now(),
     checks: [

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Routes, Route, Link, NavLink, Navigate, useParams } from 'react-router-dom';
+import { Routes, Route, Link, NavLink, Navigate, useLocation, useParams } from 'react-router-dom';
 import clsx from 'clsx';
 import CommandDeck from './pages/CommandDeck';
 import AgentsView from './pages/AgentsView';
@@ -8,6 +8,11 @@ import SettingsView from './pages/SettingsView';
 import ConnectionsView from './pages/ConnectionsView';
 import HomeView from './pages/HomeView';
 import HistoryView from './pages/HistoryView';
+import BoardView from './pages/BoardView';
+import HealthView from './pages/HealthView';
+import GraphView from './pages/GraphView';
+import LessonsView from './pages/LessonsView';
+import HealthStrip from './components/HealthStrip';
 import SetupView, { BackToSetup } from './pages/SetupView';
 import { SessionGate } from './Session';
 import Toaster from './components/Toaster';
@@ -17,8 +22,13 @@ import { useSystem } from './hooks/useSystem';
 import { countedTokens, fmtTokens } from './agents';
 import { Badge, Logo, LogoMark } from './ui';
 
-const NAV = [
-  { to: '/home', label: 'Home' },
+/** `also`: other addresses under the same item (a task opened from the board is at /home/:id). */
+const NAV: Array<{ to: string; label: string; also?: string[] }> = [
+  { to: '/board', label: 'Board', also: ['/home'] },
+  { to: '/agents', label: 'Agents' },
+  { to: '/graph', label: 'Graph' },
+  { to: '/lessons', label: 'Lessons' },
+  { to: '/health', label: 'Health' },
   { to: '/history', label: 'History' },
   { to: '/setup', label: 'Setup' },
 ];
@@ -66,23 +76,25 @@ function DemoBanner() {
 }
 
 function Shell() {
+  const { pathname } = useLocation();
+  const under = (p: string) => pathname === p || pathname.startsWith(`${p}/`);
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-hud-bg text-hud-bright">
       <header className="flex items-center gap-3 sm:gap-5 px-4 sm:px-5 h-14 flex-shrink-0 border-b border-hud-border bg-hud-surface">
-        <Link to="/home" aria-label="FryDay Code, Home" className="rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
+        <Link to="/board" aria-label="FryDay Code, Board" className="rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
           <span className="hidden sm:inline-flex"><Logo size={26} /></span>
           <span className="sm:hidden inline-flex"><LogoMark size={26} /></span>
         </Link>
         <nav aria-label="Main" className="flex gap-1">
-          {NAV.map(({ to, label }) => (
+          {NAV.map(({ to, label, also }) => (
             <NavLink key={to} to={to}
-              className={({ isActive }) => clsx('px-3.5 py-1.5 rounded-full text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60',
-                isActive ? 'bg-hud-cyan/10 text-hud-cyan font-semibold' : 'text-hud-dim hover:text-hud-bright hover:bg-hud-border/40')}>
+              className={({ isActive }) => clsx('px-3 sm:px-3.5 py-1.5 rounded-full text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60',
+                isActive || also?.some(under) ? 'bg-hud-cyan/10 text-hud-cyan font-semibold' : 'text-hud-dim hover:text-hud-bright hover:bg-hud-border/40')}>
               {label}
             </NavLink>
           ))}
         </nav>
-        <div className="ml-auto"><WeekTokens /></div>
+        <div className="ml-auto flex items-center gap-4"><HealthStrip /><WeekTokens /></div>
       </header>
       {import.meta.env.VITE_DEMO === '1' ? <PublicDemoBanner /> : <DemoBanner />}
 
@@ -90,7 +102,12 @@ function Shell() {
 
       <main className="flex-1 min-h-0 overflow-auto">
         <Routes>
-          <Route index element={<Navigate to="/home" replace />} />
+          <Route index element={<Navigate to="/board" replace />} />
+          <Route path="/board" element={<BoardView />} />
+          <Route path="/health" element={<HealthView />} />
+          <Route path="/agents" element={<AgentsView />} />
+          <Route path="/graph" element={<GraphView />} />
+          <Route path="/lessons" element={<LessonsView />} />
           <Route path="/home" element={<HomeView />} />
           <Route path="/home/new" element={<HomeView creating />} />
           <Route path="/home/:id" element={<HomeView />} />
@@ -100,17 +117,16 @@ function Shell() {
           <Route path="/setup/projects" element={<BackToSetup><ReposView /></BackToSetup>} />
           <Route path="/setup/connections" element={<BackToSetup><ConnectionsView /></BackToSetup>} />
           <Route path="/setup/agents" element={<BackToSetup><SettingsView /></BackToSetup>} />
-          <Route path="/setup/activity" element={<BackToSetup><AgentsView /></BackToSetup>} />
+          <Route path="/setup/activity" element={<Navigate to="/agents" replace />} />
           <Route path="/setup/console" element={<BackToSetup><CommandDeck /></BackToSetup>} />
           {/* Earlier addresses, still used by links in Chat messages and old bookmarks. */}
           <Route path="/command" element={<Navigate to="/home" replace />} />
           <Route path="/tasks" element={<Navigate to="/home" replace />} />
           <Route path="/tasks/:id" element={<TaskRedirect />} />
-          <Route path="/agents" element={<Navigate to="/setup/activity" replace />} />
           <Route path="/repos" element={<Navigate to="/setup/projects" replace />} />
           <Route path="/connections" element={<Navigate to="/setup/connections" replace />} />
           <Route path="/settings" element={<Navigate to="/setup/agents" replace />} />
-          <Route path="*" element={<Navigate to="/home" replace />} />
+          <Route path="*" element={<Navigate to="/board" replace />} />
         </Routes>
       </main>
     </div>

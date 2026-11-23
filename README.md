@@ -68,8 +68,32 @@ Or run the same demo locally with `npx fryday-code demo` (see [Install](#install
   team lead carries it out, under the same rules as the buttons.
 - **Keeps you in the loop** with toasts, desktop notifications and, if you like, a Google Chat space,
   where you can also give tasks and approve with a one-time code.
-- **Shows its work.** A team chat in plain words on Home, and every agent's steps, tokens and time on
-  the task page.
+- **Runs a board, not just a chat.** Every task sits in a column of the board with a priority. Tasks can
+  wait for each other ("start after T-3 passes its review", "staging after T-3"), and a scheduler starts
+  queued tasks set to start automatically, by priority, as agent slots and the machine allow. A task
+  that needs changes in several projects becomes an initiative with one sub-task per project, split by
+  you or suggested by the Understander and confirmed by you.
+- **Watches the machine.** CPU, memory (with macOS memory pressure), disk and each running agent's own
+  CPU and memory, live in the header and on the Health page. New work waits while the machine is short
+  of memory or disk.
+- **Shows its work.** A team chat in plain words on each task, and every agent's steps, tokens and time on
+  the task page. The Agents page has one lane per agent: what it is doing now, its recent runs (each
+  opening every step it took, the files it changed, the commands it ran with their exit codes, its
+  report and the Builder's diff for that round), and a scorecard for the last 7 and 30 days: how often
+  the Builder's first round passes, rounds to pass, what sends work back, tokens per task and runs
+  stopped at a limit. Each task shows its acceptance criteria next to the planned tests and what the
+  Checker and testers found for each.
+- **Knows your projects without re-reading them.** Core reads each project's production branch without
+  running anything from it (packages, scripts, env key names, routes, the services it calls) and draws
+  which project calls which on the Graph page. Links it guessed from names stay dashed until you confirm
+  them; your edits survive every rescan. Agents get a short map of the project and its neighbours
+  instead of exploring the repository again.
+- **Learns, with you as the gate.** The Builder rates its own work against each criterion, and its
+  scorecard shows how often it was right. When a task is sent back, stopped or fails a round, the
+  Reflector, an agent with no tools at all, reads what happened and proposes at most three lessons.
+  Nothing reaches an agent until you approve it on the Lessons page, where each lesson shows its
+  evidence and, once in use, how often it helped. Lessons that keep not helping are suggested for
+  retirement.
 
 ## How it works
 
@@ -84,6 +108,7 @@ Or run the same demo locally with `npx fryday-code demo` (see [Install](#install
 | **Checker** (Reviewer) | Checks the change against each acceptance criterion and must give evidence; cannot overrule a failing check | No |
 | **App tester / Page tester** | Use the running service through its HTTP API, and its pages in Chrome | No |
 | **Releaser** | Core itself: push and merge into staging, on your yes | (core, not an agent) |
+| **Reflector** | After a task went wrong, proposes lessons for the other agents; you approve each one | No (no tools at all) |
 
 ### The journey
 
@@ -112,7 +137,8 @@ In more detail:
   branch being continued. Your own checkout is never touched.
 - **Checks.** Run in a sandbox on a clean checkout of exactly what was committed. On a repository that
   is already red, only *new* failures block.
-- **Diff scan.** Deleted, skipped or focused tests block the change; edits to hooks, CI, package scripts
+- **Diff scan.** Deleted, skipped or focused tests block the change, and so do added secret files and
+  added lines that look like a key or token (the value is never repeated); edits to hooks, CI, package scripts
   or dependencies are flagged for you.
 - **Trying it out running.** For a project with a run profile, FryDay Code starts the project as a
   service (in the sandbox, from the reviewed commit). The **App tester** sends requests and checks the
@@ -240,18 +266,27 @@ Then, in the UI (a new install shows these steps on Home until a project is conf
    Settings).
 2. **Setup → Your projects → Add project**: give the folder of a clone (or a Git URL to clone). FryDay
    Code works out the branches and the check commands; you correct and confirm them.
-3. **Home → New task**: describe the change in your own words. Optionally drop a PRD or notes, pick the
-   project (or let FryDay Code work it out), and under More options name an existing branch to
-   continue.
+3. **Board → New task**: describe the change in your own words. Optionally drop a PRD or notes, pick the
+   project (or let FryDay Code work it out) and a priority. Under More options: start it automatically
+   when a slot is free, make it wait for other tasks, split it across several projects, or name an
+   existing branch to continue.
 
-FryDay Code opens on **Home**: your tasks on the left (Needs you, Agents working, Done this week), the
-open task on the right. The journey line shows where the task is, and the team chat under it shows what
+FryDay Code opens on the **Board**: initiatives on top with their parts, then a column per step
+(Backlog, Understand, Plan, Build, Check, Needs you, Live, Done). In the Backlog you set priority, order
+and auto-start, or start a task now. Each card shows what it waits for and which agent is on it.
+**Health** shows the machine and the scheduler's slots. Opening a task shows your tasks on the left
+(Needs you, Agents working, Waiting to start, Done this week) and the task on the right, with its
+priority, what it waits for and, for an initiative, its parts. The journey line shows where the task is, and the team chat under it shows what
 the agents said to each other, in plain words. Questions and approvals appear in the chat with buttons;
 every approval says in plain words what will happen, with the technical list one click away.
 **Technical details** opens the full task page: every agent and step in order, the hand-offs and
 send-backs, what the working agent is doing right now, and each agent's tokens (and how much came
-from cache) and time against its limits. **History** has finished tasks and the week's tokens per
-agent. The UI follows the system's light or dark mode.
+from cache) and time against its limits; under the Checker, a table ties each acceptance criterion to
+its planned tests and to what the Checker and each tester found. **Agents** shows each agent's lane,
+runs and scorecard. **Graph** shows which project calls which, for you to confirm or correct.
+**Lessons** holds what the Reflector proposed, with its evidence, for you to approve, reword or reject,
+and the lessons in use with how often they helped. **History** has finished tasks and where tokens and agent time went, by stage
+and by project. The UI follows the system's light or dark mode.
 
 ## Configuration
 

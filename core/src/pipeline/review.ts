@@ -158,8 +158,84 @@ function checkLine(c: CheckResult): string {
   return `- ${c.name} — \`${c.cmd}\`: ${label[c.status]}${fresh}`;
 }
 
+export const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** The entry of `found` that is about `criterion`: same words, or the same place when both lists are as long. */
+export function matchCriterion<T extends { criterion: string }>(criterion: string, index: number, total: number, found: T[]): T | undefined {
+  const key = normalize(criterion);
+  return found.find((f) => normalize(f.criterion) === key)
+    ?? found.find((f) => normalize(f.criterion).includes(key) || key.includes(normalize(f.criterion)))
+    ?? (found.length === total ? found[index] : undefined);
+}
+
+// ─── The coder's self-check ───────────────────────────────────────────────────
+
+/** What the coder said of one acceptance criterion (1-based, as numbered in the plan). */
+export interface SelfClaim { index: number; claim: 'met' | 'unsure'; evidence: string }
+
+/** How the coder's self-check compared with the tester's verdict on the same criteria. */
+export interface Calibration {
+  /** Criteria the coder said were met. */
+  claimedMet: number;
+  /** Of those, the ones the tester found not met. */
+  overconfident: number;
+  /** Criteria the coder was not sure of. */
+  unsure: number;
+  /** Of those, the ones the tester found not met: an honest doubt. */
+  unsureUnmet: number;
+  /** The criteria (as written in the plan) the coder wrongly said were met. */
+  misses: string[];
+}
+
+export interface SelfCheck { claims: SelfClaim[]; calibration: Calibration | null }
+
+const SELF_CHECK_HEADING = /^[ \t]*#{1,4}[ \t]*self[- ]?check\b.*$/im;
+const CLAIM_LINE = /^\s*(?:[-*]\s*)?(\d{1,2})[.):]\s*(met|not sure|unsure|not met)\b\s*(?:[—–:-]\s*)?(.*)$/i;
+
+/**
+ * The "Self-check" section at the end of the coder's report: one line per criterion,
+ * "1. met — evidence" or "2. not sure — why". A criterion the coder left out counts as
+ * not sure; "not met" is read as not sure too (the coder should have fixed it).
+ */
+export function parseSelfCheck(report: string | null, criteriaCount: number): SelfClaim[] {
+  if (!report || criteriaCount === 0) return [];
+  const start = report.search(SELF_CHECK_HEADING);
+  if (start < 0) return [];
+  const byIndex = new Map<number, SelfClaim>();
+  for (const line of report.slice(start).split('\n').slice(1)) {
+    if (/^\s*#{1,4}\s/.test(line)) break;
+    const m = line.match(CLAIM_LINE);
+    if (!m) continue;
+    const index = Number(m[1]);
+    if (index < 1 || index > criteriaCount || byIndex.has(index)) continue;
+    byIndex.set(index, { index, claim: m[2]!.toLowerCase() === 'met' ? 'met' : 'unsure', evidence: m[3]!.trim().slice(0, 300) });
+  }
+  return [...byIndex.values()].sort((a, b) => a.index - b.index);
+}
+
+/** Compare the self-check with the tester's verdict. Null when there is nothing to compare. */
+export function calibrate(criteria: string[], claims: SelfClaim[], verdict: Verdict | null): Calibration | null {
+  if (!verdict || claims.length === 0) return null;
+  const found = verdict.criteria;
+  const result: Calibration = { claimedMet: 0, overconfident: 0, unsure: 0, unsureUnmet: 0, misses: [] };
+  for (const c of claims) {
+    const criterion = criteria[c.index - 1];
+    if (criterion === undefined) continue;
+    const judged = matchCriterion(criterion, c.index - 1, criteria.length, found);
+    if (!judged) continue;
+    if (c.claim === 'met') {
+      result.claimedMet++;
+      if (!judged.met) { result.overconfident++; result.misses.push(criterion); }
+    } else {
+      result.unsure++;
+      if (!judged.met) result.unsureUnmet++;
+    }
+  }
+  return result.claimedMet + result.unsure > 0 ? result : null;
+}
+
 /** What the coder is told when a round is sent back. */
-export function coderFeedback(round: number, checks: CheckResult[], flags: DiffFlag[], verdict: Verdict | null): string {
+export function coderFeedback(round: number, checks: CheckResult[], flags: DiffFlag[], verdict: Verdict | null, calibration: Calibration | null = null): string {
   const parts = [`The review of round ${round} found problems. Fix them in this same workspace, then finish with your report.`];
 
   const failing = checks.filter(isBlocking);
@@ -189,6 +265,9 @@ export function coderFeedback(round: number, checks: CheckResult[], flags: DiffF
     if (issues.length > 0) {
       parts.push("## Tester's findings\n\n" + issues.map((i) => `- [${i.severity}]${i.file ? ` ${i.file}:` : ''} ${i.description}`).join('\n'));
     }
+  }
+  if (calibration?.misses.length) {
+    parts.push(`## Your self-check\n\nYou said these were met; the tester found they are not. Before you call a criterion met, check it the way the tester will (run or read the test that proves it):\n\n${calibration.misses.map((m) => `- ${m}`).join('\n')}`);
   }
   return parts.join('\n\n');
 }
@@ -222,6 +301,8 @@ export interface ReviewBrief {
   earlier?: Array<{ round: number; feedback: string }>;
   /** What the owner wrote on the task (fromTheOwner), already a Markdown section; empty when nothing. */
   ownerNotes?: string;
+  /** Lessons approved by the owner for the Checker (learning/inject.ts), already a Markdown section. */
+  lessons?: string;
 }
 
 const EARLIER_CHARS = 5000;
@@ -259,6 +340,7 @@ export function writeReviewBrief(checkoutPath: string, brief: ReviewBrief): void
       ? '## What testers saw in earlier rounds\n\nThis is history, from earlier commits of this task: what a tester observed when the service was started and used, and sent back to the Coder. It is not about the commit you are reviewing. The checks above are the only results for this commit. Where it quotes an observed fact (a response, a value read from a database), the Coder was right to act on it even if the task text does not say it. Check that each point is dealt with in this change.\n\n' +
         brief.earlier.map((e) => `### Round ${e.round} (an earlier commit)\n\n${tail(demoteHeadings(e.feedback), EARLIER_CHARS)}`).join('\n\n')
       : '',
+    brief.lessons ?? '',
     '## The change\n\nSee `diff.patch` in this folder.',
   ].filter(Boolean).join('\n\n');
 

@@ -42,6 +42,7 @@ const ROLE_LABEL: Record<string, { name: string; job: string }> = {
   tester: { name: 'Checker', job: 'checks the change against the criteria' },
   api_tester: { name: 'App tester', job: 'uses the running service through its API and reads granted data' },
   ui_tester: { name: 'Page tester', job: 'uses the pages in a browser and takes screenshots' },
+  reflector: { name: 'Reflector', job: 'reads a finished task and proposes lessons for you to approve' },
   system: { name: 'System', job: 'small internal runs' },
 };
 interface RoleUsage { role: string; runs: number; budgetStops: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }

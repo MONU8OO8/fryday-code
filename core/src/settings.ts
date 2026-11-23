@@ -15,7 +15,7 @@ import type { AgentRole } from './guard/policy.js';
 
 export const MODELS = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] as const;
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export const ROLES = ['fryday', 'analyst', 'planner', 'coder', 'tester', 'api_tester', 'ui_tester', 'system'] as const satisfies readonly AgentRole[];
+export const ROLES = ['fryday', 'analyst', 'planner', 'coder', 'tester', 'api_tester', 'ui_tester', 'reflector', 'system'] as const satisfies readonly AgentRole[];
 
 export const ENGINES = ['claude', 'cursor'] as const;
 /** Roles the Cursor CLI may run: read-only ones, because it has no guard on each tool call. */
@@ -52,6 +52,7 @@ const SettingsSchema = z.object({
     tester: RoleSettings,
     api_tester: RoleSettings,
     ui_tester: RoleSettings,
+    reflector: RoleSettings,
     system: RoleSettings,
   }).strict(),
   /** From this coder round on, use a stronger model: the cheap one has had its chances. */
@@ -98,6 +99,8 @@ export function defaultSettings(): Settings {
       // Trying things out is many small steps, not deep thought: the mid model does it well.
       api_tester: { engine: 'claude', cursorModel: 'auto', model: 'claude-sonnet-5-5', effort: 'medium', tokenLimit: 600_000, timeoutMinutes: 20 },
       ui_tester:  { engine: 'claude', cursorModel: 'auto', model: 'claude-sonnet-5-5', effort: 'medium', tokenLimit: 800_000, timeoutMinutes: 20 },
+      // One structured answer from a text record: no tools, no exploring.
+      reflector: { engine: 'claude', cursorModel: 'auto', model: 'claude-sonnet-5-5', effort: 'low', tokenLimit: 150_000, timeoutMinutes: 5 },
       system:  { engine: 'claude', cursorModel: 'auto', model: 'claude-haiku-5-5',  effort: 'low',    tokenLimit: 100_000,   timeoutMinutes: 5 },
     },
     coderEscalation: { fromRound: 3, model: 'claude-opus-5-5' },

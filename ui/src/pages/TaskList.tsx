@@ -12,7 +12,7 @@ import JourneyLine from '../components/JourneyLine';
 import { Badge, Button, EmptyState, buttonClass, cardClass } from '../ui';
 
 const WEEK = 7 * 24 * 3600 * 1000;
-const ORDER: TaskGroup[] = ['needs_you', 'working', 'done'];
+const ORDER: TaskGroup[] = ['needs_you', 'working', 'waiting', 'done'];
 
 export default function TaskList({ selected }: { selected: string | null }) {
   const api = useCoreApi();

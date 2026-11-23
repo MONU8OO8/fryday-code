@@ -1,5 +1,7 @@
 import VerifyCard, { type Verification } from './VerifyCard';
 import DeployCard, { type Deploy } from './DeployCard';
+import TraceTable from '../components/TraceTable';
+import LessonsUsed from '../components/LessonsUsed';
 import AgentFlow, { type Flow, type FlowNodeId } from '../components/AgentFlow';
 import AgentCrew from '../components/AgentCrew';
 import { useNow } from '../components/Meters';
@@ -464,6 +466,7 @@ export default function TaskDetail() {
       : 'idle',
   };
   const points = lastRound?.verdict?.criteria ?? [];
+  const roundsVersion = rounds.map((r) => `${r.round}:${r.outcome ?? ''}:${r.verdict ? 1 : 0}:${r.verify ? 1 : 0}`).join(',');
   const open = points.filter((c) => !c.met).length;
   const checkLine = !lastRound ? 'Runs the project\'s own checks, then reviews the change against the plan.'
     : stage.check === 'working' && lastRound.outcome === null ? `Checking round ${lastRound.round}…`
@@ -554,6 +557,8 @@ export default function TaskDetail() {
           {rounds.length > 0 ? (
             <div className="space-y-2">
               <RoundCard round={rounds[rounds.length - 1]!} taskId={task.id} />
+              <TraceTable taskId={task.id} version={roundsVersion} />
+              <LessonsUsed taskId={task.id} version={roundsVersion} />
               {rounds.length > 1 && (
                 <details>
                   <summary className="cursor-pointer rounded text-sm text-hud-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">

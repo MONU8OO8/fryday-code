@@ -86,6 +86,8 @@ export function requestNextApproval(taskId: string): string {
     const ticket = requestReleaseApproval(taskId);
     return `Approve to merge it into ${(JSON.parse(ticket.payload_json) as { stgBranch: string }).stgBranch}.`;
   } catch (err) {
+    // Held back by a task it depends on: the scheduler raises the ticket once that is on staging.
+    if (message(err).startsWith('Waiting')) return message(err);
     // Nothing to approve (no staging branch for this project, say): the branch is simply ready.
     return `The branch is ready. ${message(err)}.`;
   }

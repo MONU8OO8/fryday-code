@@ -11,7 +11,8 @@ import { getRepo } from '../registry/registry.js';
 import { recentActivity, type RunEventSummary } from '../runner/runEvents.js';
 import { parseBrief } from './brief.js';
 import { taskFlow, type TaskFlow } from './flow.js';
-import { groupOf, journeyOf, overviewLine, type Journey, type TaskGroup, type TaskOutcome } from './journey.js';
+import { columnOf, groupOf, initiativeLine, journeyOf, journeyOfInitiative, overviewLine, type BoardColumn, type Journey, type TaskGroup, type TaskOutcome } from './journey.js';
+import { boardFacts, type BoardFacts } from './board.js';
 import { listQuestions, NO_ANSWER } from './questions.js';
 import { parsePlan } from './review.js';
 import { getRounds, roundCleared } from './rounds.js';
@@ -455,6 +456,8 @@ export interface TaskStory {
   canStop: boolean;
   /** POST /api/tasks/:id/send-back { note } is available. */
   canSendBack: boolean;
+  /** Priority, dependencies, sub-tasks and the agent at work (PATCH /api/tasks/:id/board, /dependencies). */
+  board: BoardFacts;
 }
 
 export type AskAgain = 'release' | 'deploy' | null;
@@ -517,6 +520,9 @@ export interface OverviewItem {
   updatedAt: number;
   /** Counted tokens the task has used so far (the flow budget's usedTokens). */
   usedTokens: number;
+  /** Where it sits on the board; null for an initiative, which heads its sub-tasks instead. */
+  column: BoardColumn | null;
+  board: BoardFacts;
 }
 
 function projectNameOf(task: TaskRow): string | null {
@@ -543,7 +549,7 @@ export function taskStory(taskId: string): TaskStory | null {
   if (!task) return null;
   const flow = taskFlow(taskId)!;
   const db = getDb();
-  const runs = db.prepare('SELECT id, role, state, started_at, ended_at, log_path FROM runs WHERE task_id = ? ORDER BY started_at').all(taskId) as RunRow[];
+  const runs = db.prepare(`SELECT id, role, state, started_at, ended_at, log_path FROM runs WHERE task_id = ? AND role != 'reflector' ORDER BY started_at`).all(taskId) as RunRow[];
   const endedAt = (role: string) => runs.filter((r) => r.role === role && r.state === 'completed').at(-1)?.ended_at ?? task.updated_at;
   const created = new Map((db.prepare('SELECT round, created_at FROM task_rounds WHERE task_id = ?').all(taskId) as Array<{ round: number; created_at: number }>).map((r) => [r.round, r.created_at]));
   const brief = parseBrief(task.brief_json);
@@ -619,6 +625,7 @@ export function taskStory(taskId: string): TaskStory | null {
     discarded,
     canStop: canStop(taskId),
     canSendBack: sendBack,
+    board: boardFacts(task),
     askAgain: askAgainOf({
       state: task.state, approvals, hasStaging: has.hasStaging, hasDeployer: has.hasDeployer,
       jenkinsReady: loadJenkinsCredentials() !== null,
@@ -637,7 +644,7 @@ function storedOutcome(taskId: string, state: string, flow: TaskFlow): TaskOutco
   const db = getDb();
   const approvals = (db.prepare('SELECT action, state, requested_at, resolved_at FROM approvals WHERE task_id = ?').all(taskId) as Array<{ action: string; state: string; requested_at: number; resolved_at: number | null }>)
     .map((a) => ({ action: a.action, state: a.state, requestedAt: a.requested_at, resolvedAt: a.resolved_at }));
-  const lastRun = db.prepare('SELECT MAX(started_at) AS at FROM runs WHERE task_id = ?').get(taskId) as { at: number | null } | undefined;
+  const lastRun = db.prepare(`SELECT MAX(started_at) AS at FROM runs WHERE task_id = ? AND role != 'reflector'`).get(taskId) as { at: number | null } | undefined;
   const release = db.prepare('SELECT state, started_at FROM releases WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { state: string; started_at: number } | undefined;
   const deploy = db.prepare('SELECT started_at FROM deploys WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { started_at: number } | undefined;
   return outcomeOf({
@@ -648,23 +655,58 @@ function storedOutcome(taskId: string, state: string, flow: TaskFlow): TaskOutco
   });
 }
 
+/** Every task still open, and the `limit` most recently changed ones besides; initiatives after their sub-tasks. */
 export function tasksOverview(limit = 100): OverviewItem[] {
-  const rows = getDb().prepare('SELECT id FROM tasks ORDER BY updated_at DESC LIMIT ?').all(limit) as Array<{ id: string }>;
-  return rows.flatMap(({ id }) => {
+  const rows = getDb().prepare(`
+    SELECT id FROM tasks
+    WHERE state NOT IN ('deployed', 'failed') OR id IN (SELECT id FROM tasks ORDER BY updated_at DESC LIMIT ?)
+    ORDER BY kind = 'initiative', updated_at DESC
+  `).all(limit) as Array<{ id: string }>;
+  const byId = new Map<string, OverviewItem>();
+  const items = rows.flatMap(({ id }) => {
     // One task whose stored facts cannot be read must not take the whole list down.
     try {
-      const task = getTask(id);
-      const flow = task ? taskFlow(id) : null;
-      if (!task || !flow) return [];
-      const outcome = storedOutcome(id, task.state, flow);
-      const journey = journeyOf(flow, task.state, outcome);
-      return [{
-        id, title: task.title, state: task.state, group: groupOf(task.state, outcome), line: overviewLine(task.state, journey, outcome), journey,
-        projectName: projectNameOf(task), createdAt: task.created_at, updatedAt: task.updated_at, usedTokens: flow.budget.usedTokens,
-      }];
+      const item = overviewItem(id, byId);
+      if (item) byId.set(id, item);
+      return item ? [item] : [];
     } catch (err) {
       console.error('[fryday-core] overview: could not read', id, err);
       return [];
     }
   });
+  return items.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function overviewItem(id: string, known: Map<string, OverviewItem>): OverviewItem | null {
+  const task = getTask(id);
+  const flow = task ? taskFlow(id) : null;
+  if (!task || !flow) return null;
+  const board = boardFacts(task);
+  const base = { id, title: task.title, state: task.state, projectName: projectNameOf(task), createdAt: task.created_at, board };
+  if (task.kind === 'initiative') {
+    const parts = board.children.map((c) => known.get(c) ?? overviewItem(c, known)).filter((p): p is OverviewItem => p !== null);
+    const journey = journeyOfInitiative(parts.map((p) => p.journey), task.state);
+    const counts = {
+      total: parts.length,
+      done: parts.filter((p) => p.state === 'deployed' || (p.group === 'done' && p.state !== 'failed')).length,
+      stopped: parts.filter((p) => p.state === 'failed').length,
+      needYou: parts.filter((p) => p.group === 'needs_you').length,
+    };
+    return {
+      ...base, journey, column: null,
+      group: counts.needYou || task.state === 'needs_owner' || task.state === 'waiting_owner' ? 'needs_you'
+        : task.state === 'tracking' && parts.length > 0 && parts.every((p) => p.group === 'waiting') ? 'waiting'
+        : groupOf(task.state),
+      line: initiativeLine(task.state, counts),
+      updatedAt: Math.max(task.updated_at, ...parts.map((p) => p.updatedAt)),
+      usedTokens: flow.budget.usedTokens + parts.reduce((n, p) => n + p.usedTokens, 0),
+    };
+  }
+  const outcome = storedOutcome(id, task.state, flow);
+  const journey = journeyOf(flow, task.state, outcome);
+  const line = board.waiting && (task.state === 'queued' || task.state === 'awaiting_approval') ? board.waiting : overviewLine(task.state, journey, outcome);
+  return {
+    ...base, journey, column: columnOf(task.state, journey, outcome), group: groupOf(task.state, outcome), line,
+    updatedAt: task.updated_at, usedTokens: flow.budget.usedTokens,
+  };
 }

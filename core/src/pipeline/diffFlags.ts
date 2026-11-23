@@ -3,11 +3,15 @@
  * by asking an agent.
  *
  *   blocking: the change weakens the tests (deletes a test file, skips or focuses a
- *             test). Green checks mean nothing after that, so the task goes back.
+ *             test), or adds what looks like a credential (a key, a token, a secrets
+ *             file). Green checks mean nothing after the first; the second must never
+ *             reach a remote. Either way the task goes back.
  *   review:   the change touches something that runs code elsewhere or loosens a
  *             safety net (hooks, CI, package scripts, dependencies, lint/type
  *             suppressions). Allowed, but shown to the Tester and the owner.
  */
+
+import { SECRET_VALUES } from '../secretPatterns.js';
 
 export type FlagSeverity = 'blocking' | 'review';
 
@@ -21,7 +25,8 @@ export interface DiffFlag {
     | 'package-scripts'
     | 'dependencies'
     | 'suppression'
-    | 'claude-config';
+    | 'claude-config'
+    | 'secret';
   path: string;
   detail: string;
 }
@@ -37,6 +42,9 @@ const FOCUSED = /\b(describe|context|it|test|suite)\s*\.\s*only\s*\(|\b(fit|fdes
 const HOOK_OR_CI = /(^|\/)(\.husky|\.githooks|\.github\/workflows|\.circleci)\/|(^|\/)(Jenkinsfile|\.gitlab-ci\.yml|Dockerfile|docker-compose[^/]*\.ya?ml|Makefile|lefthook\.ya?ml|\.pre-commit-config\.yaml)$/;
 const DEPENDENCY_FILE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|requirements[^/]*\.txt|poetry\.lock|Pipfile(\.lock)?|go\.(mod|sum))$/;
 const CLAUDE_CONFIG = /(^|\/)(\.claude\/|\.cursor\/|CLAUDE\.md$|AGENTS\.md$|\.mcp\.json$)/;
+// The guard's secrets-file pattern (guard/decide.mjs SECRET_FILE / SECRET_OK); diffFlags.test.ts checks the two agree.
+const SECRET_FILE = /(^|\/)(\.env(\..*)?|\.npmrc|\.netrc|\.pgpass|id_(rsa|dsa|ecdsa|ed25519)|.*\.(pem|key|p12|pfx|keystore)|.*creds?.*\.sh|credentials(\.json)?|secrets?(\.(json|ya?ml|env))?)$/i;
+const SECRET_OK = /(^|\/)\.env\.(example|sample|template)$/i;
 const SUPPRESSION = /eslint-disable|@ts-ignore|@ts-nocheck|@ts-expect-error|#\s*type:\s*ignore|#\s*noqa|nolint|istanbul ignore|c8 ignore|pragma: no cover/;
 
 /** Added lines per file, from a unified diff (`git diff -U0` is enough). */
@@ -95,8 +103,16 @@ export function analyzeDiff(input: AnalyzeInput): DiffFlag[] {
     if (CLAUDE_CONFIG.test(p)) {
       flags.push({ severity: 'review', kind: 'claude-config', path: p, detail: 'instructions or settings for AI agents changed' });
     }
+    if (!file.status.startsWith('D') && SECRET_FILE.test(p) && !SECRET_OK.test(p)) {
+      flags.push({ severity: 'blocking', kind: 'secret', path: p, detail: 'a file that holds secrets was added or changed' });
+    }
 
     const lines = added.get(p) ?? [];
+    // The detail names what it looks like and where; it never repeats the value.
+    for (const [what, pattern] of SECRET_VALUES) {
+      const at = lines.findIndex((l) => pattern.test(l));
+      if (at >= 0) { flags.push({ severity: 'blocking', kind: 'secret', path: p, detail: `an added line looks like ${what}` }); break; }
+    }
     if (isTest) {
       const skipped = lines.find((l) => SKIPPED.test(l));
       if (skipped) flags.push({ severity: 'blocking', kind: 'test-skipped', path: p, detail: `a test was skipped: ${skipped.trim().slice(0, 120)}` });

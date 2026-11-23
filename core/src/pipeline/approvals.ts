@@ -25,6 +25,7 @@ import { commitsBesidesTheTask, twinBranchName } from './release.js';
 import { ownerEmail } from './branches.js';
 import { deployerOf, deployParams, loadJenkinsCredentials } from '../deploy/config.js';
 import { oneYesToStaging, STAGING_PROMPT_EFFECT } from '../deploy/deployFlow.js';
+import { unmetDependencies, type Blocker } from './taskLinks.js';
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'expired' | 'executed';
 
@@ -90,6 +91,8 @@ export function requestReleaseApproval(taskId: string): ApprovalRow {
   }
   const rounds = getRounds(taskId);
   if (!roundCleared(rounds[rounds.length - 1]?.outcome)) throw new ApprovalError(409, `${taskId} has not passed checks and review`);
+  const waiting = unmetDependencies(taskId, 'release');
+  if (waiting.length) throw new ApprovalError(409, releaseWaitNote(taskId, waiting));
   const repo = getRepo(ws.repo_id);
   if (!repo?.stgBranch) throw new ApprovalError(409, `${repo?.name ?? ws.repo_id} has no staging branch in the registry`);
   const release = latestRelease(taskId);
@@ -157,6 +160,11 @@ export function requestReleaseApproval(taskId: string): ApprovalRow {
   return raiseTicket(taskId, 'release_stg', payload, ws.head_sha);
 }
 
+/** Why a task is not asking for its release yet. Starts with "Waiting", which the scheduler looks for. */
+export function releaseWaitNote(taskId: string, waiting: Blocker[]): string {
+  return `Waiting to merge ${taskId}: ${waiting.map((w) => w.why).join('; ')}. FryDay asks for the release as soon as that is done.`;
+}
+
 /**
  * Put a question to the owner. A task has at most one open ticket: raising a new one
  * voids the one before it.
@@ -203,6 +211,9 @@ export function registerApprovalAction(action: string, handler: ApprovalAction):
 
 registerApprovalAction('release_stg', {
   onApprove: async (ticket) => {
+    // A dependency added after the ticket was raised still holds the merge back.
+    const waiting = unmetDependencies(ticket.task_id, 'release');
+    if (waiting.length) throw new Error(releaseWaitNote(ticket.task_id, waiting));
     await executeRelease({ id: ticket.id, task_id: ticket.task_id, commit_sha: ticket.commit_sha! });
   },
   declinedNote: 'You declined the release. The branch is kept; nothing was pushed.',

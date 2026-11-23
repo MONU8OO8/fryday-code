@@ -15,6 +15,11 @@ import path from 'node:path';
  */
 
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob']);
+
+// Roles that read only the text core gives them (policy.ts NO_TOOL_ROLES). Every call but
+// their final structured answer is refused, even if their policy file lists tools by mistake.
+const NO_TOOL_ROLES = new Set(['fryday', 'reflector', 'system']);
+const STRUCTURED_OUTPUT = 'StructuredOutput';
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 
 // Files that hold secrets, wherever they are — even inside a root the agent may read.
@@ -269,6 +274,9 @@ export function decideMcp(rule, input) {
 export function decide(policy, toolName, toolInput, cwd) {
   if (!policy || !Array.isArray(policy.allowedTools) || !Array.isArray(policy.readRoots) || !Array.isArray(policy.writeRoots)) {
     return deny('guard policy is missing or malformed');
+  }
+  if (NO_TOOL_ROLES.has(policy.role) && !(toolName === STRUCTURED_OUTPUT && policy.allowedTools.includes(STRUCTURED_OUTPUT))) {
+    return deny(`the ${policy.role} agent has no tools: it answers from the text it was given`);
   }
   const input = toolInput && typeof toolInput === 'object' ? toolInput : {};
   if (typeof toolName === 'string' && toolName.startsWith('mcp__')) {

@@ -94,7 +94,7 @@ export interface AgentRunner {
 export const claudeRunner: AgentRunner = {
   id: 'claude',
   label: 'Claude Code',
-  caps: { guardHook: true, structuredOutput: true, osSandbox: 'shell', budgetStop: true, roles: ['fryday', 'analyst', 'planner', 'coder', 'tester', 'api_tester', 'ui_tester', 'system'] },
+  caps: { guardHook: true, structuredOutput: true, osSandbox: 'shell', budgetStop: true, roles: ['fryday', 'analyst', 'planner', 'coder', 'tester', 'api_tester', 'ui_tester', 'reflector', 'system'] },
   available() {
     const bin = getConfig().claudeBin;
     return path.isAbsolute(bin) ? (fs.existsSync(bin) ? { ok: true } : { ok: false, why: `${bin} was not found` }) : findOnPath(bin) ? { ok: true } : { ok: false, why: 'claude is not on PATH' };

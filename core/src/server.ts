@@ -24,6 +24,9 @@ import { registerDeploy, reconcileDeploysOnStartup } from './deploy/deployFlow.j
 import { sseHandler } from './api/events.js';
 import { tasksRouter } from './api/tasks.js';
 import { agentsRouter } from './api/agents.js';
+import { graphRouter } from './api/graph.js';
+import { lessonsRouter } from './api/lessons.js';
+import { refreshAll } from './knowledge/graph.js';
 import { registryRouter } from './api/registry.js';
 import { approvalsRouter } from './api/approvals.js';
 import { chatRouter } from './api/chat.js';
@@ -33,11 +36,16 @@ import { connectionsRouter } from './api/connections.js';
 import { notificationsRouter } from './api/notifications.js';
 import { deployRouter } from './api/deploy.js';
 import { runnersRouter } from './api/runners.js';
+import { systemRouter } from './api/system.js';
+import { startScheduler } from './pipeline/scheduler.js';
+import { registerInitiatives } from './pipeline/initiative.js';
+import { admission, startHealthSampler } from './system/health.js';
 import { chatInboundRouter, oauthCallback } from './api/chatInbound.js';
 import { startInbound } from './chatin/inbound.js';
 import { registerOwnerNotifications } from './notify/owner.js';
 import { authorize, checkLocal, hasUiSession, uiSessionCookie, LaunchCodes, CORE_TOKEN_HEADER } from './api/auth.js';
 import { importSeedIfEmpty } from './registry/registry.js';
+import { registerLearning } from './learning/retro.js';
 import { browserHost } from './platform.js';
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
@@ -48,11 +56,15 @@ if (seeded > 0) console.log(`[fryday-core] Imported ${seeded} project${seeded ==
 const launchCodes = new LaunchCodes();
 registerPipeline(); // before runs are picked up again, so their endings are handled
 registerLead(); // the Lead's answers are handled the same way
+registerLearning(); // retros after tasks end, and the scoring of lessons they were given
 registerOwnerNotifications();
 registerDeploy();
+registerInitiatives(); // an initiative's state follows its sub-tasks
 reconcileRunsOnStartup();
 recoverInterruptedTasks();
 reconcileDeploysOnStartup();
+startHealthSampler();
+startScheduler(admission); // after recovery, so a recovered task is not started twice
 startInbound();
 void reconcileReleasesOnStartup().catch((err) => console.error('[fryday-core] could not reconcile releases:', err));
 
@@ -184,7 +196,10 @@ app.use('/api/connections', connectionsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/deploy', deployRouter);
 app.use('/api/runners', runnersRouter);
+app.use('/api/system', systemRouter);
 app.use('/api/chat-inbound', chatInboundRouter);
+app.use('/api/graph', graphRouter);
+app.use('/api/lessons', lessonsRouter);
 
 // ─── UI static files (built by ui/vite.config.ts → core/public) ──────────────
 const uiDir = path.join(__dirname, '..', 'public');
@@ -225,6 +240,8 @@ app.listen(cfg.port, cfg.host, () => {
   console.log(`[fryday-core] State: ${cfg.home}`);
   console.log(`[fryday-core] Open (one-time link, valid 15 minutes): ${launchUrl(launchCodes.issue())}`);
   console.log('[fryday-core] Later, or in another browser: npx fryday-code open (or npm run open in a clone)');
+  // The service graph catches up with production commits that moved while core was off.
+  void refreshAll();
 });
 
 export { app };

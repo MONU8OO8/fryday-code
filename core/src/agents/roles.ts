@@ -14,5 +14,6 @@ export const ROLE_DESCRIPTIONS: Record<AgentRole, string> = {
   tester: 'Reviews coder output against the plan and repo conventions; runs checks',
   api_tester: 'Exercises the running service through its HTTP API and checks data read-only',
   ui_tester: 'Opens the running service in a browser and checks what a person would see and do',
+  reflector: 'Reads a finished task\'s record and proposes lessons; the owner approves each one before any agent sees it',
   system: 'Internal one-shot runs started by core itself',
 };

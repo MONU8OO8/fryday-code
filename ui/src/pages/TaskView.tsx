@@ -15,6 +15,7 @@ import { fmtTokens } from '../agents';
 import JourneyLine from '../components/JourneyLine';
 import TeamChat from '../components/TeamChat';
 import TeamStrip from '../components/TeamStrip';
+import BoardStrip from '../components/BoardStrip';
 import { Avatar, Button, EmptyState, PageHeader, buttonClass, cardClass, controlClass } from '../ui';
 
 export default function TaskView({ id }: { id: string }) {
@@ -84,13 +85,18 @@ export default function TaskView({ id }: { id: string }) {
     <div className={clsx(cardClass('none'), 'flex flex-col h-full min-h-0 px-4 py-4 sm:px-6 sm:py-5')}>
       <Link to="/home" className="md:hidden text-sm text-hud-cyan mb-2">← All tasks</Link>
       <PageHeader title={<span title={task.title} className="line-clamp-2 break-words">{task.title}</span>}
-        subtitle={<>{task.projectName ?? 'Project not chosen yet'} · started {ago(task.createdAt)} · {fmtTokens(task.budget.usedTokens)} of {fmtTokens(task.budget.limitTokens)} tokens</>}
+        subtitle={<>{story.board?.kind === 'initiative' ? `Split into ${story.board.children.length} tasks` : task.projectName ?? 'Project not chosen yet'} · started {ago(task.createdAt)} · {fmtTokens(task.budget.usedTokens)} of {fmtTokens(task.budget.limitTokens)} tokens</>}
         actions={<>
           {story.canStop && <Button variant="danger" size="sm" disabled={busy} onClick={stop}>Stop</Button>}
           <Link to={`/home/${id}/details`} className={buttonClass('ghost', 'sm')}>Who did what</Link>
         </>} />
       <TeamStrip story={story} />
       <JourneyLine key={id} journey={journey} />
+      {story.board && (
+        <BoardStrip board={story.board} notStarted={task.state === 'queued'} busy={busy}
+          onChange={(change) => void act(() => api.patch(`/tasks/${encodeURIComponent(id)}/board`, change))}
+          onDropDependency={(dep) => void act(() => api.del(`/tasks/${encodeURIComponent(id)}/dependencies/${encodeURIComponent(dep)}`))} />
+      )}
       {now && (
         <div className="flex items-center gap-2.5 rounded-xl bg-hud-cyan/[0.07] border border-hud-cyan/15 px-3 py-2 text-sm mb-3">
           <Avatar actor={now.actor} size="sm" />

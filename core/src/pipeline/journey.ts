@@ -94,12 +94,14 @@ export function journeyOf(flow: TaskFlow, taskState: string, outcome: TaskOutcom
   };
 }
 
-export type TaskGroup = 'needs_you' | 'working' | 'done';
+/** `waiting`: not started yet (the backlog, or held by a dependency). */
+export type TaskGroup = 'needs_you' | 'working' | 'waiting' | 'done';
 
 export function groupOf(state: string, outcome: TaskOutcome = null): TaskGroup {
   if (outcome) return 'done';
   if (state === 'waiting_owner' || state === 'awaiting_approval' || state === 'needs_owner') return 'needs_you';
   if (state === 'deployed' || state === 'failed') return 'done';
+  if (state === 'queued') return 'waiting';
   return 'working';
 }
 
@@ -124,4 +126,58 @@ export function overviewLine(state: string, journey: Journey, outcome: TaskOutco
     case 'failed': return 'Stopped';
     default: return journey.current ? WORKING_LINE[journey.current] : 'Working on it';
   }
+}
+
+// ─── The board ────────────────────────────────────────────────────────────────
+
+/** The board's columns, left to right. A task is in exactly one; an initiative in none (it heads its sub-tasks). */
+export type BoardColumn = 'backlog' | 'understand' | 'plan' | 'build' | 'check' | 'needs_you' | 'live' | 'done';
+export const BOARD_COLUMNS: BoardColumn[] = ['backlog', 'understand', 'plan', 'build', 'check', 'needs_you', 'live', 'done'];
+
+export function columnOf(state: string, journey: Journey, outcome: TaskOutcome = null): BoardColumn {
+  if (outcome || state === 'deployed' || state === 'failed') return 'done';
+  if (state === 'queued') return 'backlog';
+  if (groupOf(state, outcome) === 'needs_you') return 'needs_you';
+  switch (journey.current) {
+    case 'plan': return 'plan';
+    case 'build': return 'build';
+    case 'check': return 'check';
+    case 'live': return 'live';
+    case 'approve': return 'needs_you';
+    default: return 'understand';
+  }
+}
+
+/**
+ * An initiative's journey line, from its sub-tasks' lines: a stop is active or waiting when any
+ * sub-task is there, done when every sub-task that went through it is done.
+ */
+export function journeyOfInitiative(children: Journey[], state: string): Journey {
+  const stops = STOP_ORDER.map((id) => {
+    const states = children.map((j) => j.stops.find((s) => s.id === id)!.state);
+    let s: StopState = 'idle';
+    if (states.includes('active')) s = 'active';
+    else if (states.includes('waiting')) s = 'waiting';
+    else if (states.length && states.every((x) => x === 'done' || x === 'skipped')) s = states.every((x) => x === 'skipped') ? 'skipped' : 'done';
+    else if (states.includes('failed') && !states.includes('idle')) s = 'failed';
+    return { id, state: s };
+  });
+  const currents = children.map((j) => j.current).filter((c): c is StopId => c !== null);
+  const current = currents.length ? STOP_ORDER.find((id) => currents.includes(id))! : null;
+  return {
+    stops,
+    current,
+    sendbacks: children.reduce((n, j) => n + j.sendbacks, 0),
+    finished: state === 'deployed' ? 'live' : state === 'failed' ? 'stopped' : null,
+  };
+}
+
+export function initiativeLine(state: string, counts: { total: number; done: number; stopped: number; needYou: number }): string {
+  if (state === 'deployed') return `Done: all ${counts.total} parts on staging`;
+  if (state === 'failed') return 'Stopped';
+  if (state === 'waiting_owner') return 'Has a question for you';
+  if (counts.needYou) return `${counts.needYou} part${counts.needYou === 1 ? ' needs' : 's need'} you · ${counts.done} of ${counts.total} done`;
+  if (state === 'needs_owner') return `${counts.stopped} of ${counts.total} parts stopped: needs you`;
+  if (state === 'tracking') return `${counts.done} of ${counts.total} parts on staging`;
+  return overviewLine(state, { stops: [], current: null, sendbacks: 0, finished: null });
 }

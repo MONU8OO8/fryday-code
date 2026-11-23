@@ -50,6 +50,17 @@ function migrate(db: Database.Database): void {
   addColumn('runs', 'engine', "TEXT NOT NULL DEFAULT 'claude'");
   addColumn('runs', 'wants_json', 'INTEGER');
   addColumn('runs', 'token_limit', 'INTEGER');
+  addColumn('tasks', 'parent_id', 'TEXT');
+  addColumn('tasks', 'priority', "TEXT NOT NULL DEFAULT 'p2' CHECK (priority IN ('p0', 'p1', 'p2', 'p3'))");
+  addColumn('tasks', 'kind', "TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('task', 'initiative'))");
+  addColumn('tasks', 'auto_start', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('tasks', 'position', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('task_rounds', 'self_check_json', 'TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_id)');
+  // A follow-up started before v2 kept its link in metadata; it becomes a link row once.
+  const followUps = db.prepare(`SELECT id, json_extract(metadata_json, '$.followUpOf') AS of FROM tasks WHERE json_extract(metadata_json, '$.followUpOf') IS NOT NULL`).all() as Array<{ id: string; of: string }>;
+  const link = db.prepare(`INSERT OR IGNORE INTO task_dependencies (task_id, depends_on, gate, created_at) SELECT ?, ?, 'link', ? WHERE EXISTS (SELECT 1 FROM tasks WHERE id = ?)`);
+  for (const f of followUps) if (f.of !== f.id) link.run(f.id, f.of, Date.now(), f.of);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

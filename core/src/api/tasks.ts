@@ -11,6 +11,10 @@
  * POST   /api/tasks/:id/messages               — say something on the task's thread ({ body })
  * POST   /api/tasks/:id/questions/:qid/answer  — answer a question ({ answer })
  * POST   /api/tasks/:id/questions/skip         — go on without answering the open questions
+ * PATCH  /api/tasks/:id/board                   — priority, auto-start, board position
+ * POST   /api/tasks/:id/dependencies            — wait for another task ({ dependsOn, gate })
+ * DELETE /api/tasks/:id/dependencies/:dep       — stop waiting for it
+ * POST   /api/tasks/board/order                 — put the backlog in this order ({ ids })
  */
 
 import express, { Router } from 'express';
@@ -38,7 +42,13 @@ import { QuestionError, answerQuestion, listQuestions, skipOpenQuestions } from 
 import { addMessage, listMessages } from '../pipeline/thread.js';
 import { parseBrief } from '../pipeline/brief.js';
 import { taskStory, tasksOverview } from '../pipeline/story.js';
+import { traceability } from '../pipeline/traceability.js';
 import { askLead, markNotesHandled, startProposal, LeadError } from '../pipeline/lead.js';
+import { PRIORITIES } from '../pipeline/taskState.js';
+import { addDependency, removeDependency, reorderBacklog, unmetDependencies, updateBoardFields, LinkError } from '../pipeline/taskLinks.js';
+import { splitIntoSubtasks, validSplit } from '../pipeline/initiative.js';
+import { kickScheduler } from '../pipeline/scheduler.js';
+import { listRepos } from '../registry/registry.js';
 
 export const tasksRouter = Router();
 
@@ -51,7 +61,34 @@ const CreateTaskBody = z.object({
   branch: z.string().min(1).max(200).optional(),
   /** False to create the task without starting it, so documents can be attached first. */
   start: z.boolean().optional(),
+  priority: z.enum(PRIORITIES).optional(),
+  /** Leave it to the scheduler: it starts when a slot is free and what it waits for is done. */
+  autoStart: z.boolean().optional(),
+  /** Tasks this one waits for. */
+  dependsOn: z.array(z.object({ id: z.string().min(1), gate: z.enum(['start', 'release', 'link']) })).max(20).optional(),
+  /** Work in several projects: one sub-task each, made at once (an initiative). */
+  parts: z.array(z.object({
+    repoId: z.string().min(1),
+    title: z.string().min(1).max(200),
+    description: z.string().max(20_000).optional(),
+    /** Positions of earlier parts this one waits for. */
+    dependsOn: z.array(z.number().int().min(0)).max(6).optional(),
+    gate: z.enum(['start', 'release']).optional(),
+  })).min(2).max(6).optional(),
 });
+
+const BoardBody = z.object({
+  priority: z.enum(PRIORITIES).optional(),
+  autoStart: z.boolean().optional(),
+  position: z.number().int().min(0).optional(),
+});
+const DependencyBody = z.object({ dependsOn: z.string().min(1), gate: z.enum(['start', 'release', 'link']) });
+const OrderBody = z.object({ ids: z.array(z.string().min(1)).max(500) });
+
+function linkFailed(res: express.Response, err: unknown): void {
+  if (!(err instanceof LinkError)) throw err;
+  res.status(err.status).json({ error: err.message });
+}
 
 const StartBody = z.object({ repoId: z.string().min(1).optional(), branch: z.string().min(1).max(200).optional() });
 
@@ -63,12 +100,47 @@ tasksRouter.post('/', (req, res) => {
     return;
   }
 
-  const task = createTask(parsed.data.title, parsed.data.description);
+  const body = parsed.data;
+  if (body.parts) {
+    const verified = listRepos().filter((r) => r.verified).map((r) => r.id);
+    const parts = validSplit(body.parts.map((p) => ({
+      projectId: p.repoId, title: p.title, description: p.description?.trim() || body.description, dependsOn: p.dependsOn ?? [], gate: p.gate ?? 'start',
+    })), verified);
+    if (!parts || parts.length !== body.parts.length) {
+      res.status(400).json({ error: 'Each part needs a confirmed project, and the parts must cover at least two projects' });
+      return;
+    }
+    const parent = createTask(body.title, body.description, { priority: body.priority });
+    const children = splitIntoSubtasks(parent.id, parts, { autoStart: body.autoStart ?? body.start !== false });
+    kickScheduler();
+    res.status(201).json({ ...getTask(parent.id), children: children.map((c) => c.id), startError: null });
+    return;
+  }
+
+  for (const d of body.dependsOn ?? []) {
+    if (!getTask(d.id)) { res.status(400).json({ error: `No task ${d.id} to depend on` }); return; }
+  }
+  const metadata = body.repoId ? { plannedProject: body.repoId, ...(body.branch ? { plannedBranch: body.branch } : {}) } : undefined;
+  const task = createTask(body.title, body.description, { priority: body.priority, autoStart: body.autoStart, metadata });
   const id = task.id;
+  try {
+    for (const d of body.dependsOn ?? []) addDependency(id, d.id, d.gate);
+  } catch (err) {
+    linkFailed(res, err);
+    return;
+  }
+  // Waiting for another task to pass review: the scheduler starts it then, not now.
+  const held = unmetDependencies(id, 'start').length > 0;
+  if (held && body.start !== false && !body.autoStart) updateBoardFields(id, { autoStart: true });
+  if (body.autoStart || held) {
+    kickScheduler();
+    res.status(201).json({ ...getTask(id), startError: null });
+    return;
+  }
 
   // The task exists either way; a start that is refused is reported alongside it.
   let startError: string | null = null;
-  if (parsed.data.start !== false) {
+  if (body.start !== false) {
     try {
       startTask(id, parsed.data.repoId ?? null, { branch: parsed.data.branch });
     } catch (err) {
@@ -200,7 +272,7 @@ tasksRouter.post('/:id/deploy', async (req, res) => {
 tasksRouter.delete('/:id/workspace', (req, res) => {
   const db = getDb();
   const id = req.params['id'];
-  const running = db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running'`).get(id) as { n: number };
+  const running = db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running' AND role != 'reflector'`).get(id) as { n: number };
   if (running.n > 0) { res.status(409).json({ error: 'An agent is still working on this task; stop it first' }); return; }
   if (latestRelease(id)?.state === 'running') { res.status(409).json({ error: 'This task is being released right now' }); return; }
   if (isVerifying(id)) { res.status(409).json({ error: 'This task is being verified right now; stop the task first' }); return; }
@@ -308,6 +380,13 @@ tasksRouter.get('/:id/story', (req, res) => {
   res.json(story);
 });
 
+// Each acceptance criterion with the tests the plan named and what the Checker and testers found.
+tasksRouter.get('/:id/trace', (req, res) => {
+  const trace = traceability(req.params['id']!);
+  if (!trace) { res.status(404).json({ error: 'Task not found' }); return; }
+  res.json(trace);
+});
+
 // ─── GET /api/tasks/:id ───────────────────────────────────────────────────────
 tasksRouter.get('/:id', (req, res) => {
   const db = getDb();
@@ -367,6 +446,45 @@ tasksRouter.get('/:id/evidence/:round/:name', (req, res) => {
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('cache-control', 'private, max-age=3600');
   fs.createReadStream(file).pipe(res);
+});
+
+// ─── The board ────────────────────────────────────────────────────────────────
+tasksRouter.post('/board/order', (req, res) => {
+  const parsed = OrderBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'ids must be a list of task ids' }); return; }
+  reorderBacklog(parsed.data.ids);
+  kickScheduler();
+  res.json({ ok: true });
+});
+
+tasksRouter.patch('/:id/board', (req, res) => {
+  const parsed = BoardBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'priority must be p0–p3, autoStart true or false, position a whole number' }); return; }
+  try {
+    const task = updateBoardFields(req.params['id'], parsed.data);
+    kickScheduler();
+    res.json(task);
+  } catch (err) {
+    linkFailed(res, err);
+  }
+});
+
+tasksRouter.post('/:id/dependencies', (req, res) => {
+  const parsed = DependencyBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'dependsOn is a task id; gate is start, release or link' }); return; }
+  try {
+    const dep = addDependency(req.params['id'], parsed.data.dependsOn, parsed.data.gate);
+    kickScheduler();
+    res.status(201).json(dep);
+  } catch (err) {
+    linkFailed(res, err);
+  }
+});
+
+tasksRouter.delete('/:id/dependencies/:dep', (req, res) => {
+  if (!removeDependency(req.params['id'], req.params['dep'])) { res.status(404).json({ error: 'No such dependency' }); return; }
+  kickScheduler();
+  res.json({ ok: true });
 });
 
 // ─── PATCH /api/tasks/:id ─────────────────────────────────────────────────────

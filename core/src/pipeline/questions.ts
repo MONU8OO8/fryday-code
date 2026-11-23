@@ -13,7 +13,7 @@ import { addMessage } from './thread.js';
  * project  which project the task is for (the answer is a project id)
  * branch   continue on an existing branch or start a new one (the answer is one of the options)
  */
-export type QuestionKind = 'clarify' | 'project' | 'branch';
+export type QuestionKind = 'clarify' | 'project' | 'branch' | 'split';
 
 export interface QuestionOption {
   value: string;

@@ -3,7 +3,7 @@
 import { getDb, nowMs } from '../db/db.js';
 import type { CheckResult } from './checks.js';
 import type { DiffFlag } from './diffFlags.js';
-import type { Verdict } from './review.js';
+import type { SelfCheck, Verdict } from './review.js';
 import type { Verification } from '../verify/report.js';
 
 /** accepted: the round was escalated, and the owner accepted the change as it is. */
@@ -23,11 +23,14 @@ export interface Round {
   verify: Verification | null;
   outcome: RoundOutcome | null;
   feedback: string | null;
+  /** The coder's self-check on each criterion and how it compared with the tester. */
+  selfCheck: SelfCheck | null;
 }
 
 interface RoundRow {
   task_id: string; round: number; head_sha: string | null; checks_json: string | null; flags_json: string | null;
   verdict_json: string | null; verify_json: string | null; outcome: RoundOutcome | null; feedback: string | null;
+  self_check_json: string | null;
 }
 
 const fromRow = (r: RoundRow): Round => ({
@@ -40,6 +43,7 @@ const fromRow = (r: RoundRow): Round => ({
   verify: r.verify_json ? (JSON.parse(r.verify_json) as Verification) : null,
   outcome: r.outcome,
   feedback: r.feedback,
+  selfCheck: r.self_check_json ? (JSON.parse(r.self_check_json) as SelfCheck) : null,
 });
 
 export function getRounds(taskId: string): Round[] {
@@ -58,12 +62,16 @@ export function saveGate(taskId: string, round: number, headSha: string, checks:
     VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(task_id, round) DO UPDATE SET
       head_sha = excluded.head_sha, checks_json = excluded.checks_json, flags_json = excluded.flags_json,
-      verdict_json = NULL, verify_json = NULL, outcome = NULL, feedback = NULL
+      verdict_json = NULL, verify_json = NULL, outcome = NULL, feedback = NULL, self_check_json = NULL
   `).run(taskId, round, headSha, JSON.stringify(checks), JSON.stringify(flags), nowMs());
 }
 
 export function saveVerdict(taskId: string, round: number, verdict: Verdict): void {
   getDb().prepare('UPDATE task_rounds SET verdict_json = ? WHERE task_id = ? AND round = ?').run(JSON.stringify(verdict), taskId, round);
+}
+
+export function saveSelfCheck(taskId: string, round: number, selfCheck: SelfCheck): void {
+  getDb().prepare('UPDATE task_rounds SET self_check_json = ? WHERE task_id = ? AND round = ?').run(JSON.stringify(selfCheck), taskId, round);
 }
 
 export function saveOutcome(taskId: string, round: number, outcome: RoundOutcome, feedback: string | null): void {

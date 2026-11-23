@@ -8,7 +8,10 @@
  *   2. A PreToolUse hook that checks paths, commands and MCP tool arguments on every call.
  */
 
-export type AgentRole = 'fryday' | 'analyst' | 'planner' | 'coder' | 'tester' | 'api_tester' | 'ui_tester' | 'system';
+export type AgentRole = 'fryday' | 'analyst' | 'planner' | 'coder' | 'tester' | 'api_tester' | 'ui_tester' | 'reflector' | 'system';
+
+/** Roles that read only the text core gives them. The guard hook refuses every tool for these, whatever a policy file says. */
+export const NO_TOOL_ROLES: readonly AgentRole[] = ['fryday', 'reflector', 'system'];
 
 export interface RolePolicy {
   /** Built-in tools the role gets. Empty means none. */
@@ -76,6 +79,14 @@ export const ROLE_POLICIES: Record<AgentRole, RolePolicy> = {
   ui_tester: {
     allowedTools: ['Read', 'Grep', 'Glob'],
     mayUseMcp: true,
+    mayActOutward: false,
+    mayWriteOutsideWorktree: false,
+    permissionMode: 'dontAsk',
+  },
+  // Reads a finished task's record (text from core) and proposes lessons for the owner to approve.
+  reflector: {
+    allowedTools: [],
+    mayUseMcp: false,
     mayActOutward: false,
     mayWriteOutsideWorktree: false,
     permissionMode: 'dontAsk',

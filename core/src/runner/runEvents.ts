@@ -5,6 +5,7 @@
 
 import fs from 'fs';
 import os from 'os';
+import { redactSecrets } from '../secretPatterns.js';
 import { parseLine, type ClaudeAssistantEvent, type ClaudeEvent, type ClaudeInitEvent, type ClaudeResultEvent } from './streamParser.js';
 
 export type RunEventSummary =
@@ -35,7 +36,7 @@ export function summarizeEvent(event: ClaudeEvent): RunEventSummary | null {
     const u = (event as ClaudeAssistantEvent).message?.usage;
     return {
       kind: 'assistant',
-      text: text.slice(0, 600),
+      text: redactSecrets(text).slice(0, 600),
       tools,
       // What each tool call was about, in a few words, for the live view.
       toolInputs: content.flatMap((c) => (c.type === 'tool_use' ? [toolHint(c.input)] : [])),
@@ -53,7 +54,7 @@ export function summarizeEvent(event: ClaudeEvent): RunEventSummary | null {
     return {
       kind: 'result',
       isError: Boolean(r.is_error),
-      text: typeof r.result === 'string' ? r.result : '',
+      text: typeof r.result === 'string' ? redactSecrets(r.result) : '',
       sessionId: r.session_id,
       usage: {
         inputTokens: r.usage?.input_tokens ?? 0,
@@ -85,14 +86,14 @@ const HINT_CHARS = 90;
 
 /**
  * A few words about what a tool call was for: the path, address, command or query. The
- * live view shows it next to the tool name. Never a file's content.
+ * live view shows it next to the tool name. Never a file's content, and never a secret-looking value.
  */
 export function toolHint(input: Record<string, unknown> | undefined): string {
   if (!input || typeof input !== 'object') return '';
   for (const key of HINT_KEYS) {
     const value = input[key];
     if (typeof value === 'string' && value.trim()) {
-      const flat = shortenPaths(value.replace(/\s+/g, ' ').trim());
+      const flat = redactSecrets(shortenPaths(value.replace(/\s+/g, ' ').trim()));
       return flat.length > HINT_CHARS ? `${flat.slice(0, HINT_CHARS)}…` : flat;
     }
   }

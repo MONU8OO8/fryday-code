@@ -42,10 +42,12 @@ import { activeWorkspace, saveWorkspace, readGuidance, reviewCheckoutPath, baseC
 import { cannotRun, checkSpecs, runCheck, runChecks, type CheckResult, type CheckSpec } from './checks.js';
 import { depsForCheckout, depsUsable } from './deps.js';
 import { analyzeDiff, type DiffFlag } from './diffFlags.js';
-import { saveGate, saveVerdict, saveOutcome, getRound, getRounds } from './rounds.js';
+import { saveGate, saveVerdict, saveOutcome, saveSelfCheck, getRound, getRounds } from './rounds.js';
 import { raiseTicket, registerApprovalAction, type ApprovalRow } from './approvals.js';
 import { requestNextApproval, executeBranchPush } from './pushFlow.js';
-import { BRIEF_SCHEMA, TRIAGE_SCHEMA, TASK_FOLDER, parseBrief, parseTriage, briefText, writeTaskFolder, type Brief } from './brief.js';
+import { BRIEF_SCHEMA, TRIAGE_SCHEMA, TASK_FOLDER, parseBrief, parseTriage, briefText, writeTaskFolder, type Brief, type Triage } from './brief.js';
+import { splitIntoSubtasks, validSplit } from './initiative.js';
+import { unmetDependencies } from './taskLinks.js';
 import { branchFacts, existsOnRemote, fetchBranches, listCandidates } from './branches.js';
 import { askQuestions, listQuestions, openQuestions } from './questions.js';
 import { addMessage, ownerNotes } from './thread.js';
@@ -55,11 +57,15 @@ import { prepareDeployer } from '../deploy/ownerDeploy.js';
 import { documentsText } from './attachments.js';
 import { retryWhenBusy, cancelPendingRetry, type RetryStage } from './retry.js';
 import { verifyRound, onTesterRunExit, runProfileOf, isTesterRole, stopVerification, type VerifyHost } from './verifyFlow.js';
+import { ownerSentBack, taskEnded } from '../learning/retro.js';
+import { lessonsFor } from '../learning/inject.js';
 import { stopLeftoverServices } from '../verify/service.js';
 import {
   PLAN_SCHEMA, VERDICT_SCHEMA, parsePlan, parseVerdict, verdictPasses, gateBlocks, coderFeedback, roundSummary,
-  writeReviewBrief, type Plan, type Verdict,
+  writeReviewBrief, parseSelfCheck, calibrate, type Plan, type Verdict, type SelfCheck, type Calibration,
 } from './review.js';
+import { refreshWithin } from '../knowledge/graph.js';
+import { projectMap } from '../knowledge/digest.js';
 
 const prompt = (name: string) => fs.readFileSync(path.join(__dirname, '..', 'agents', 'prompts', `${name}.md`), 'utf8').trim();
 const PLANNER_PROMPT = prompt('planner');
@@ -269,7 +275,7 @@ interface Intake {
   /** Branches the Analyst was shown; it may only name one of these. */
   candidates: string[];
   /** What the open questions are about. */
-  waitingFor: 'project' | 'clarify' | 'branch' | null;
+  waitingFor: 'project' | 'clarify' | 'branch' | 'split' | null;
 }
 
 function intakeOf(task: TaskRow): Intake {
@@ -309,6 +315,8 @@ export function startTask(taskId: string, repoId: string | null = null, opts: St
   const task = getTask(taskId);
   if (!task) throw new StartError(`Unknown task ${taskId}`);
   if (task.state !== 'queued') throw new StartError(`${taskId} is ${task.state}; only a queued task can be started`);
+  const waiting = unmetDependencies(taskId, 'start');
+  if (waiting.length) throw new StartError(`Not yet: ${waiting.map((w) => w.why).join('; ')}. Turn on auto-start and FryDay starts it then, or remove the dependency.`);
   const branch = opts.branch?.trim().replace(/^origin\//, '') || null;
   if (branch && !repoId) throw new StartError('Choose the project when you name a branch to continue');
   if (branch && !BRANCH_NAME.test(branch)) throw new StartError(`"${branch}" is not a branch name`);
@@ -376,6 +384,8 @@ async function startBrief(task: TaskRow, intake: Intake): Promise<void> {
   writeTaskFolder(checkout, {
     taskId, title: task.title, description: task.description,
     questions: listQuestions(taskId), notes: ownerNotes(taskId), candidates, namedBranch: intake.branch,
+    projectMap: projectMap(taskId, repo.id),
+    lessons: lessonsFor(taskId, 'analyst', repo.id, { text: `${task.title}\n${task.description}` }),
   });
   saveIntake(taskId, { ...intake, stage: 'brief', candidates: candidates.map((c) => c.name) });
   await startTaskAgent(taskId, { role: 'analyst', round: 0 }, {
@@ -419,6 +429,26 @@ function onAnalystExit(exit: RunExit, run: RunRow): void {
 function afterTriage(task: TaskRow, intake: Intake, run: RunRow): void {
   const projects = listRepos().filter((r) => r.verified);
   const triage = parseTriage(run.output_json);
+  const split = triage ? validSplit(triage.subtasks, projects.map((p) => p.id)) : null;
+  if (triage && split) {
+    // Kept until the owner answers: the split to make, or the single project to go on with.
+    updateTaskMetadata(task.id, { proposedSplit: { ...triage, subtasks: split } });
+    const name = (id: string) => projects.find((p) => p.id === id)?.name ?? id;
+    const parts = split.map((s, i) => `${i + 1}. ${name(s.projectId)}: ${s.title}${s.dependsOn.length ? ` (after ${s.dependsOn.map((d) => d + 1).join(', ')}${s.gate === 'release' ? ' reaches staging' : ''})` : ''}`).join('\n');
+    askQuestions(task.id, 'analyst', [{
+      kind: 'split',
+      question: `This needs changes in ${new Set(split.map((s) => s.projectId)).size} projects. Split it into ${split.length} tasks?`,
+      why: `${triage.reason}\n${parts}`,
+      options: [{ value: 'accept', label: `Split into ${split.length} tasks` }, { value: 'single', label: 'Keep it as one task' }],
+    }]);
+    waitForOwner(task.id, intake, 'split', 'This task spans several projects. Answer on the task to go on.');
+    return;
+  }
+  chooseTriagedProject(task, intake, triage, projects);
+}
+
+/** Go on with the project the Analyst is sure of, or ask the owner which one. */
+function chooseTriagedProject(task: TaskRow, intake: Intake, triage: Triage | null, projects: Project[]): void {
   const guess = triage ? projects.find((p) => p.id === triage.projectId) : undefined;
   if (triage?.confidence === 'sure' && guess) {
     saveIntake(task.id, { ...intake, repoId: guess.id });
@@ -491,7 +521,17 @@ export function ownerAnswered(taskId: string): boolean {
   const waitingFor = intake.waitingFor;
   saveIntake(taskId, { ...intake, waitingFor: null });
 
-  if (waitingFor === 'project') {
+  if (waitingFor === 'split') {
+    const proposed = taskMetadata(task)['proposedSplit'] as Triage | undefined;
+    const projects = listRepos().filter((r) => r.verified);
+    const split = proposed ? validSplit(proposed.subtasks, projects.map((p) => p.id)) : null;
+    if (lastAnswer('split') === 'accept' && split) {
+      splitIntoSubtasks(taskId, split);
+      return true;
+    }
+    setTaskState(taskId, 'intake', 'Keeping it as one task');
+    chooseTriagedProject(getTask(taskId)!, intakeOf(getTask(taskId)!), proposed ?? null, projects);
+  } else if (waitingFor === 'project') {
     const chosen = lastAnswer('project');
     const repo = chosen ? getRepo(chosen) : undefined;
     if (!repo?.verified) { handToOwner(taskId, 'The chosen project is not available any more'); return true; }
@@ -539,6 +579,8 @@ function beginWork(taskId: string, repo: Project, continueBranch: string | null)
       return;
     }
     sseEmit({ type: 'workspace_ready', taskId, repoId: repo.id, branch: ws.branch });
+    // The workspace fetched production: if it moved, the project map is rebuilt before the Planner reads it.
+    await refreshWithin(repo.id, 20_000);
     await startPlanner(taskId);
   });
 }
@@ -600,6 +642,8 @@ async function startPlannerRun(taskId: string, task: TaskRow, ws: WorkspaceRow, 
       brief ? briefText(brief, listQuestions(taskId)) : '',
       fromTheOwner(taskId),
       existingWork(ws),
+      projectMap(taskId, ws.repo_id),
+      lessonsFor(taskId, 'planner', ws.repo_id, { text: `${task.title}\n${task.description}`, areas: brief?.areas }),
     ].filter(Boolean).join('\n\n'),
     appendSystemPrompt: withGuidance(PLANNER_PROMPT, getRepo(ws.repo_id), ws),
     jsonSchema: PLAN_SCHEMA,
@@ -635,12 +679,19 @@ async function startCoder(taskId: string, round: number, feedback: string | null
   const task = getTask(taskId)!;
   const ws = activeWorkspace(taskId)!;
   const plan = planOf(task);
-  const taskText = [`Task ${task.id}: ${task.title}\n\n${task.description}`, plan ? planText(plan) : '', fromTheOwner(taskId), existingWork(ws)].filter(Boolean).join('\n\n');
 
   // Later rounds continue the coder's own conversation, so it keeps what it learned.
   const previous = getDb()
     .prepare(`SELECT session_id, started_at FROM runs WHERE task_id = ? AND role = 'coder' AND session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1`)
     .get(taskId) as { session_id: string; started_at: number } | undefined;
+  // Only a fresh coder session reads this; a resumed one already has the map and lessons from round 1.
+  const fresh = feedback === null || !previous;
+  const taskText = fresh
+    ? [
+        `Task ${task.id}: ${task.title}\n\n${task.description}`, plan ? planText(plan) : '', fromTheOwner(taskId), existingWork(ws), projectMap(taskId, ws.repo_id),
+        lessonsFor(taskId, 'coder', ws.repo_id, { text: `${task.title}\n${task.description}`, areas: parseBrief(task.brief_json)?.areas, files: plan?.files }),
+      ].filter(Boolean).join('\n\n')
+    : '';
   // What the owner said since the coder last started is new to it.
   const said = previous ? fromTheOwner(taskId, previous.started_at) : '';
   const withNotes = (text: string) => (said ? `${text}\n\n${said}` : text);
@@ -771,6 +822,7 @@ export async function reviewRound(taskId: string, round: number): Promise<void> 
     // later round gets it too, so both judge from the same facts. Earlier check results are not
     // passed on: the checks above are run again on this commit and are the only ones that count.
     earlier: getRounds(taskId).filter((r) => r.round < round && r.feedback && r.verify?.status === 'failed').slice(-2).map((r) => ({ round: r.round, feedback: r.feedback! })),
+    lessons: lessonsFor(taskId, 'tester', ws.repo_id, { text: `${task.title}\n${task.description}`, areas: parseBrief(task.brief_json)?.areas, files: planOf(task)?.files }),
   });
   if (taskTokensLeft(taskId) <= 0) {
     removeCheckout(ws.repo_path, checkout);
@@ -836,6 +888,7 @@ function onTesterExit(exit: RunExit, run: RunRow): void {
     return;
   }
   saveVerdict(taskId, run.round, verdict);
+  const selfCheck = recordSelfCheck(taskId, run.round, planOf(task)?.criteria ?? [], verdict);
 
   if (verdictPasses(verdict)) {
     sseEmit({ type: 'round_updated', taskId, round: run.round });
@@ -847,7 +900,19 @@ function onTesterExit(exit: RunExit, run: RunRow): void {
     approveRound(taskId, run.round, null);
     return;
   }
-  requestChanges(taskId, run.round, round.checks, round.flags, verdict);
+  requestChanges(taskId, run.round, round.checks, round.flags, verdict, selfCheck?.calibration ?? null);
+}
+
+/** The coder's report for this round, read for its self-check and compared with the tester's verdict. */
+function recordSelfCheck(taskId: string, round: number, criteria: string[], verdict: Verdict): SelfCheck | null {
+  const report = (getDb()
+    .prepare(`SELECT result_text FROM runs WHERE task_id = ? AND role = 'coder' AND round = ? AND state = 'completed' ORDER BY started_at DESC LIMIT 1`)
+    .get(taskId, round) as { result_text: string | null } | undefined)?.result_text ?? null;
+  const claims = parseSelfCheck(report, criteria.length);
+  if (claims.length === 0) return null;
+  const selfCheck: SelfCheck = { claims, calibration: calibrate(criteria, claims, verdict) };
+  saveSelfCheck(taskId, round, selfCheck);
+  return selfCheck;
 }
 
 /** Everything the round had to pass, it passed: ask the owner for the next step. */
@@ -865,8 +930,8 @@ function approveRound(taskId: string, round: number, verified: string | null): v
 }
 
 /** Send the round back to the coder, or to the owner once the round limit is reached. */
-function requestChanges(taskId: string, round: number, checks: CheckResult[], flags: DiffFlag[], verdict: Verdict | null): void {
-  sendBack(taskId, round, coderFeedback(round, checks, flags, verdict), roundSummary(checks, flags, verdict));
+function requestChanges(taskId: string, round: number, checks: CheckResult[], flags: DiffFlag[], verdict: Verdict | null, calibration: Calibration | null = null): void {
+  sendBack(taskId, round, coderFeedback(round, checks, flags, verdict, calibration), roundSummary(checks, flags, verdict));
 }
 
 function sendBack(taskId: string, round: number, feedback: string, summary: string): void {
@@ -905,6 +970,7 @@ const expireOpenTickets = (taskId: string) =>
  */
 export async function stopTask(taskId: string): Promise<void> {
   if (!canStop(taskId)) throw new StoppedError(409, `${taskId} has nothing to stop right now`);
+  if (getTask(taskId)!.kind === 'initiative') { await stopInitiative(taskId); return; }
   const note = 'You stopped the task. Nothing more runs until you send it back to the team.';
   cancelPendingRetry(taskId);
   stopFollowingTask(taskId, 'You stopped following the deploy. Nothing was cancelled in Jenkins.');
@@ -919,6 +985,18 @@ export async function stopTask(taskId: string): Promise<void> {
   for (const r of running) killRun(r.id);
   await stopTaskWork(taskId);
   addMessage(taskId, 'fryday', 'event', note);
+  // A task that went to failed was handled by the state change; one waiting for the owner is reflected on here.
+  if (getTask(taskId)!.state === 'needs_owner') taskEnded(taskId, 'stopped');
+  sseEmit({ type: 'task_updated', taskId });
+}
+
+/** Stop every sub-task that can be stopped (one being merged is left to finish), then end the initiative. */
+async function stopInitiative(taskId: string): Promise<void> {
+  const parts = getDb().prepare('SELECT id FROM tasks WHERE parent_id = ?').all(taskId) as Array<{ id: string }>;
+  getDb().prepare('UPDATE tasks SET auto_start = 0 WHERE parent_id = ?').run(taskId);
+  for (const p of parts) if (canStop(p.id)) await stopTask(p.id);
+  const state = getTask(taskId)!.state;
+  if (canTransition(state, 'failed')) setTaskState(taskId, 'failed', 'You stopped the initiative and its sub-tasks. Work already on staging stays there.');
   sseEmit({ type: 'task_updated', taskId });
 }
 
@@ -935,6 +1013,7 @@ export async function sendBackToBuilder(taskId: string, note: string): Promise<v
   stopFollowingTask(taskId, 'You sent the work back to be fixed, so FryDay stopped following this deploy. Nothing was cancelled in Jenkins.');
   expireOpenTickets(taskId);
   addMessage(taskId, 'owner', 'note', said);
+  ownerSentBack(taskId);
   const last = getRounds(taskId).at(-1)!;
   await startCoder(taskId, last.round + 1, OWNER_REWORK_PROMPT);
 }
@@ -948,6 +1027,7 @@ export async function sendBackFromLead(taskId: string, instructions: string): Pr
   if (!canSendBack(taskId)) throw new StoppedError(409, `${taskId} cannot be sent back right now`);
   stopFollowingTask(taskId, 'The work went back to be fixed, so FryDay stopped following this deploy. Nothing was cancelled in Jenkins.');
   expireOpenTickets(taskId);
+  ownerSentBack(taskId);
   const last = getRounds(taskId).at(-1)!;
   await startCoder(taskId, last.round + 1, `${OWNER_REWORK_PROMPT}\n\n## What the team lead understood from the owner\n\n${instructions.trim()}`);
 }
@@ -1026,7 +1106,7 @@ export function recoverInterruptedTasks(): void {
       else handToOwner(t.id, 'Fryday restarted while this task was being verified and could not continue it');
       continue;
     }
-    const running = getDb().prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running'`).get(t.id) as { n: number };
+    const running = getDb().prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running' AND role != 'reflector'`).get(t.id) as { n: number };
     if (running.n > 0) continue;
     if (t.state === 'testing' && activeWorkspace(t.id)) {
       const round = last && last.outcome === null ? last.round : (last?.round ?? 0) + 1;

@@ -42,7 +42,7 @@ export function stoppedChoices(taskId: string): StoppedChoices {
 // ─── Stopping a task, and sending finished work back ──────────────────────────
 
 /** States in which something is happening, or waiting on the owner, that Stop can end. */
-const STOPPABLE = new Set(['queued', 'intake', 'waiting_owner', 'workspace', 'planning', 'coding', 'testing', 'verifying', 'awaiting_approval', 'deploying']);
+const STOPPABLE = new Set(['queued', 'intake', 'waiting_owner', 'workspace', 'planning', 'coding', 'testing', 'verifying', 'awaiting_approval', 'deploying', 'tracking']);
 
 /**
  * Whether the owner can stop the task now. Not while it is pushing or merging (releasing):
@@ -50,6 +50,7 @@ const STOPPABLE = new Set(['queued', 'intake', 'waiting_owner', 'workspace', 'pl
  */
 export function canStop(taskId: string): boolean {
   const task = getTask(taskId);
+  if (task?.kind === 'initiative' && task.state === 'needs_owner') return true; // some parts stopped: the owner may end the rest
   return !!task && STOPPABLE.has(task.state);
 }
 
@@ -63,7 +64,7 @@ export function canSendBack(taskId: string): boolean {
   if (!task || (task.state !== 'awaiting_approval' && task.state !== 'needs_owner')) return false;
   const db = getDb();
   // The Lead answering the owner is not work on the change: it is how the work gets sent back.
-  const running = db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running' AND role != 'fryday'`).get(taskId) as { n: number };
+  const running = db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND state = 'running' AND role NOT IN ('fryday', 'reflector')`).get(taskId) as { n: number };
   if (running.n > 0) return false;
   const releasing = db.prepare(`SELECT COUNT(*) AS n FROM releases WHERE task_id = ? AND state = 'running'`).get(taskId) as { n: number };
   if (releasing.n > 0) return false;

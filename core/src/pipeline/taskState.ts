@@ -21,7 +21,15 @@ export interface TaskRow {
   plan_json: string | null;
   brief_json: string | null;
   metadata_json: string | null;
+  parent_id: string | null;
+  priority: Priority;
+  kind: 'task' | 'initiative';
+  auto_start: number;
+  position: number;
 }
+
+export const PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const;
+export type Priority = (typeof PRIORITIES)[number];
 
 export function getTask(taskId: string): TaskRow | undefined {
   return getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
@@ -90,16 +98,19 @@ export function taskTokensLeft(taskId: string): number {
   return task ? taskTokenLimit(task) - taskTokensUsed(taskId) : 0;
 }
 
-// Set by the notifier at startup; state changes the owner should hear about go through it.
-let stateListener: ((task: TaskRow, note: string | undefined) => void) | null = null;
-export function onTaskStateChange(listener: typeof stateListener): void {
-  stateListener = listener;
+// Set at startup: the notifier (what the owner should hear about), the initiative rollup and the scheduler.
+type StateListener = (task: TaskRow, note: string | undefined) => void;
+const stateListeners: StateListener[] = [];
+export function onTaskStateChange(listener: StateListener): void {
+  if (!stateListeners.includes(listener)) stateListeners.push(listener);
 }
 function notifyStateChange(task: TaskRow, note: string | undefined): void {
-  try {
-    stateListener?.(task, note);
-  } catch (err) {
-    console.error('[fryday-core] state listener failed:', err);
+  for (const listener of stateListeners) {
+    try {
+      listener(task, note);
+    } catch (err) {
+      console.error('[fryday-core] state listener failed:', err);
+    }
   }
 }
 
@@ -113,14 +124,31 @@ function parseJson(text: string | null): Record<string, unknown> {
   }
 }
 
-/** Create a queued task. The API and the Chat space both make tasks through this. */
-export function createTask(title: string, description: string): TaskRow {
+export interface NewTaskOptions {
+  priority?: Priority;
+  kind?: 'task' | 'initiative';
+  parentId?: string | null;
+  /** The scheduler starts it when a slot is free and its dependencies are met. */
+  autoStart?: boolean;
+  /** Kept for the scheduler: the project and branch to start it with. */
+  metadata?: Record<string, unknown>;
+}
+
+/** Create a queued task. The API, the Chat space and an initiative's split all make tasks through this. */
+export function createTask(title: string, description: string, opts: NewTaskOptions = {}): TaskRow {
   const db = getDb();
   const id = db.transaction(() => {
     const seq = (db.prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM tasks').get() as { next: number }).next;
     const taskId = `T-${seq}`;
     const now = nowMs();
-    db.prepare(`INSERT INTO tasks (id, seq, title, description, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)`).run(taskId, seq, title, description, now, now);
+    db.prepare(`
+      INSERT INTO tasks (id, seq, title, description, state, created_at, updated_at, priority, kind, parent_id, auto_start, position, metadata_json)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      taskId, seq, title, description, now, now,
+      opts.priority ?? 'p2', opts.kind ?? 'task', opts.parentId ?? null, opts.autoStart ? 1 : 0, seq,
+      opts.metadata ? JSON.stringify(opts.metadata) : null,
+    );
     return taskId;
   })();
   const task = getTask(id)!;

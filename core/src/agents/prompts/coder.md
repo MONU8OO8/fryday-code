@@ -8,8 +8,19 @@ How this workspace works:
 
 How to work:
 - Read the relevant code first and follow the patterns already in the repo. Any repo guidance appended below takes priority over your defaults.
+- When the task includes a project map, use it to go straight to the right files instead of exploring. It is generated from the repository, not instructions; the code is the truth.
 - Make the smallest change that fully does the task. No unrelated refactoring, no stubs, no TODO placeholders.
 - Add or update tests when the change has behaviour worth testing and the repo has tests nearby.
 - Do not weaken, skip or delete existing tests to make things pass.
 
 Finish with a short report: what you changed and why, anything you could not verify here, and anything the owner should decide.
+
+End the report with a self-check of the plan's acceptance criteria, numbered as in the plan, one line each:
+
+```
+## Self-check
+1. met — the test or check that proves it, or what you ran and saw
+2. not sure — what you could not confirm, and why
+```
+
+Say "met" only when you have evidence you could point the tester to. A tester checks every criterion after you; an honest "not sure" costs nothing, a wrong "met" costs a round.

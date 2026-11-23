@@ -89,3 +89,38 @@ test('package.json is flagged only for what changed in it', () => {
   }).find((f) => f.kind === 'package-scripts')!.detail;
   assert.equal(detail, 'package scripts changed: build, test');
 });
+
+// Credential-shaped values are built here at run time, so no real-looking secret sits in the repository.
+const fake = {
+  aws: 'AKIA' + 'Q'.repeat(16),
+  github: 'ghp_' + 'a1'.repeat(18),
+  anthropic: 'sk-ant-' + 'x'.repeat(30),
+  key: '-----BEGIN ' + 'OPENSSH PRIVATE KEY-----',
+  dsn: 'postgres://app:' + 'hunter2hunter2' + '@db.internal:5432/app',
+};
+
+test('an added credential blocks the change, and the flag never repeats the value', () => {
+  for (const [what, value] of Object.entries(fake)) {
+    const flags = flagsFor('src/config.ts', [`const v = '${value}';`]);
+    assert.deepEqual(kinds(flags), ['blocking:secret'], what);
+    assert.ok(!flags[0]!.detail.includes(value), `${what}: the detail must not contain the value`);
+    assert.ok(hasBlockingFlag(flags));
+  }
+  assert.deepEqual(flagsFor('src/config.ts', ["const key = process.env.API_KEY;", "const url = 'postgres://localhost/app';"]), [], 'reading a secret from the environment is fine');
+});
+
+test('a secrets file added to the change blocks it; an example file and a deletion do not', () => {
+  assert.deepEqual(kinds(flagsFor('.env', ['A=1'], 'A')), ['blocking:secret']);
+  assert.deepEqual(kinds(flagsFor('deploy/id_ed25519', ['x'], 'A')), ['blocking:secret']);
+  assert.deepEqual(flagsFor('.env.example', ['A='], 'A'), []);
+  assert.deepEqual(flagsFor('.env', [], 'D'), []);
+});
+
+test("the diff's secrets-file pattern is the guard's", async () => {
+  const { isSecretFile } = await import('../src/guard/decide.mjs');
+  const paths = ['.env', '.env.local', '.env.example', 'a/.npmrc', 'id_rsa', 'cert.pem', 'tls.key', 'my-creds.sh', 'credentials.json', 'secrets.yaml', 'src/index.ts', 'keys.ts', 'README.md'];
+  for (const p of paths) {
+    const flagged = flagsFor(p, ['x'], 'A').some((f) => f.kind === 'secret');
+    assert.equal(flagged, isSecretFile(p), p);
+  }
+});

@@ -3,7 +3,7 @@
 export type Actor = 'understander' | 'planner' | 'builder' | 'checks' | 'checker' | 'app_tester' | 'page_tester' | 'releaser' | 'fryday' | 'you';
 export type StopId = 'understand' | 'plan' | 'build' | 'check' | 'approve' | 'live';
 export type StopState = 'idle' | 'active' | 'waiting' | 'done' | 'failed' | 'skipped';
-export type TaskGroup = 'needs_you' | 'working' | 'done';
+export type TaskGroup = 'needs_you' | 'working' | 'waiting' | 'done';
 
 export interface Journey {
   stops: Array<{ id: StopId; state: StopState }>;
@@ -58,6 +58,8 @@ export interface TaskStory {
   choices: { tryAgain: boolean; accept: boolean; why: string | null };
   /** Its work was discarded: nothing more can happen on it. */
   discarded?: boolean;
+  /** Priority, dependencies, sub-tasks and the agent at work. Absent from an older core. */
+  board?: BoardFacts;
   /** POST /api/tasks/:id/stop is available. */
   canStop?: boolean;
   /** POST /api/tasks/:id/send-back { note } is available: the work can go back to the Builder. */
@@ -76,4 +78,28 @@ export interface OverviewItem {
   updatedAt: number;
   /** Counted tokens the task has used so far (input + output + cache writes). */
   usedTokens: number;
+  /** Where it sits on the board; null for an initiative. Absent from an older core. */
+  column?: BoardColumn | null;
+  board?: BoardFacts;
+}
+
+export type Priority = 'p0' | 'p1' | 'p2' | 'p3';
+export type Gate = 'start' | 'release' | 'link';
+export type BoardColumn = 'backlog' | 'understand' | 'plan' | 'build' | 'check' | 'needs_you' | 'live' | 'done';
+
+/** What the board shows besides the journey (core/src/pipeline/board.ts). */
+export interface BoardFacts {
+  priority: Priority;
+  kind: 'task' | 'initiative';
+  parent: { id: string; title: string } | null;
+  autoStart: boolean;
+  position: number;
+  dependsOn: Array<{ id: string; title: string; gate: Gate; met: boolean }>;
+  /** What holds it back right now, in plain words. */
+  waiting: string | null;
+  /** For an initiative: its sub-tasks, in order. */
+  children: string[];
+  /** For an initiative: the same sub-tasks with what the page shows of each. */
+  parts?: Array<{ id: string; title: string; state: string; label: string }>;
+  agent: { runId: string; who: string; since: number } | null;
 }

@@ -45,11 +45,31 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at  INTEGER NOT NULL,
   plan_json   TEXT,                      -- Planner output (repos, criteria, HLD)
   brief_json  TEXT,                      -- Analyst output (requirements, assumptions)
-  metadata_json TEXT                     -- arbitrary per-task KV
+  metadata_json TEXT,                    -- arbitrary per-task KV
+  parent_id   TEXT,                      -- the initiative this task is part of (null: a task of its own)
+  priority    TEXT NOT NULL DEFAULT 'p2' CHECK (priority IN ('p0', 'p1', 'p2', 'p3')),
+  kind        TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('task', 'initiative')),
+  auto_start  INTEGER NOT NULL DEFAULT 0, -- 1: the scheduler starts it when a slot is free and its dependencies are met
+  position    INTEGER NOT NULL DEFAULT 0  -- order in the backlog (lower first)
 );
 
 CREATE INDEX IF NOT EXISTS tasks_state ON tasks(state);
 CREATE INDEX IF NOT EXISTS tasks_created ON tasks(created_at DESC);
+
+-- ─── Task dependencies (one task waits for another) ──────────────────────────
+-- start    task_id is not started until depends_on has passed its review
+-- release  task_id is not merged into staging until depends_on is on staging
+-- link     the two are related (a follow-up); nothing waits
+CREATE TABLE IF NOT EXISTS task_dependencies (
+  task_id    TEXT NOT NULL REFERENCES tasks(id),
+  depends_on TEXT NOT NULL REFERENCES tasks(id),
+  gate       TEXT NOT NULL CHECK (gate IN ('start', 'release', 'link')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (task_id, depends_on),
+  CHECK (task_id <> depends_on)
+);
+
+CREATE INDEX IF NOT EXISTS task_dependencies_on ON task_dependencies(depends_on);
 
 -- ─── Runs ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS runs (
@@ -114,6 +134,7 @@ CREATE TABLE IF NOT EXISTS task_rounds (
   verify_json  TEXT,                      -- the running-service verification: service facts and each tester's report
   outcome      TEXT,                      -- passed | changes_requested | escalated
   feedback     TEXT,                      -- what was sent back to the coder
+  self_check_json TEXT,                   -- the coder's self-check on each criterion and how it compared with the tester (review.ts)
   created_at   INTEGER NOT NULL,
   PRIMARY KEY (task_id, round)
 );
@@ -195,7 +216,7 @@ CREATE INDEX IF NOT EXISTS task_messages_task ON task_messages(task_id, id);
 CREATE TABLE IF NOT EXISTS task_questions (
   id           TEXT PRIMARY KEY,
   task_id      TEXT NOT NULL REFERENCES tasks(id),
-  kind         TEXT NOT NULL,            -- clarify | project | branch
+  kind         TEXT NOT NULL,            -- clarify | project | branch | split
   question     TEXT NOT NULL,
   why          TEXT,
   options_json TEXT,                     -- [{ value, label }]; empty for a free-text answer
@@ -289,6 +310,81 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   processed_at INTEGER NOT NULL
 );
 
+-- ─── Service graph (knowledge/graph.ts): which project calls which ────────────
+-- Built by a deterministic scan of each project's production commit; the owner can
+-- confirm, rename, add and delete. Rows the owner touched (source = 'owner') are never
+-- overwritten by a rescan; an owner deletion stays as a row with deleted = 1.
+CREATE TABLE IF NOT EXISTS graph_nodes (
+  id          TEXT PRIMARY KEY,           -- project:<id> | endpoint:<project>:<METHOD path> | env:<project>:<KEY> | ext:<name>
+  kind        TEXT NOT NULL CHECK (kind IN ('project', 'external_service', 'endpoint', 'env_key')),
+  project_id  TEXT,                       -- the project the node belongs to (null: shared, e.g. an outside service)
+  label       TEXT NOT NULL,
+  source      TEXT NOT NULL CHECK (source IN ('scan', 'owner')),
+  confidence  REAL NOT NULL DEFAULT 1,
+  confirmed   INTEGER NOT NULL DEFAULT 0,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS graph_nodes_project ON graph_nodes(project_id);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+  from_id       TEXT NOT NULL,
+  to_id         TEXT NOT NULL,
+  kind          TEXT NOT NULL CHECK (kind IN ('calls', 'exposes', 'served_by')),
+  project_id    TEXT,                     -- the project whose scan (or whose owner edit) made it
+  evidence_json TEXT,                     -- [{file, line?}] where the scan saw it
+  source        TEXT NOT NULL CHECK (source IN ('scan', 'owner')),
+  confidence    REAL NOT NULL DEFAULT 1,  -- below 1: a guess (name matching), until the owner confirms it
+  confirmed     INTEGER NOT NULL DEFAULT 0,
+  deleted       INTEGER NOT NULL DEFAULT 0, -- 1: the owner removed it; a rescan does not bring it back
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS graph_edges_to ON graph_edges(to_id);
+CREATE INDEX IF NOT EXISTS graph_edges_project ON graph_edges(project_id);
+
+-- One row per project: the production commit last scanned, what the scan read, and the digest built from it.
+CREATE TABLE IF NOT EXISTS graph_scans (
+  project_id  TEXT PRIMARY KEY,
+  sha         TEXT,
+  scanned_at  INTEGER NOT NULL,
+  facts_json  TEXT,                       -- knowledge/scan.ts ScanFacts
+  digest      TEXT,                       -- knowledge/digest.ts, for this sha
+  error       TEXT                        -- why the last scan could not run
+);
+
+-- ─── Lessons (learning/) ──────────────────────────────────────────────────────
+-- What the agents learned from earlier tasks. Proposed by the Reflector or by core from
+-- stored facts; nothing reaches an agent until the owner makes it active.
+CREATE TABLE IF NOT EXISTS lessons (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id      TEXT,                      -- NULL: applies in every project
+  role            TEXT NOT NULL CHECK (role IN ('analyst', 'planner', 'coder', 'tester')),
+  trigger_tags    TEXT NOT NULL DEFAULT '[]', -- JSON string[]: words matched against a task's areas and files
+  text            TEXT NOT NULL,
+  evidence_json   TEXT NOT NULL DEFAULT '[]', -- JSON [{taskId, round, what}]
+  signatures_json TEXT NOT NULL DEFAULT '[]', -- failure signatures it was drawn from (learning/signatures.ts)
+  source          TEXT NOT NULL CHECK (source IN ('reflector', 'core')),
+  state           TEXT NOT NULL DEFAULT 'proposed' CHECK (state IN ('proposed', 'active', 'retired', 'rejected')),
+  uses            INTEGER NOT NULL DEFAULT 0,
+  helped          INTEGER NOT NULL DEFAULT 0,
+  hurt            INTEGER NOT NULL DEFAULT 0,
+  created_at      INTEGER NOT NULL,
+  decided_at      INTEGER,
+  CHECK (state = 'proposed' OR decided_at IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_state ON lessons(state, role);
+
+-- Which lessons an agent of a task was given, and what came of it once the task ended.
+CREATE TABLE IF NOT EXISTS lesson_uses (
+  lesson_id  INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+  task_id    TEXT NOT NULL,
+  role       TEXT NOT NULL,
+  outcome    TEXT CHECK (outcome IN ('helped', 'hurt', 'neutral')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (lesson_id, task_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_uses_task ON lesson_uses(task_id);
+
 -- ─── Schema version ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
@@ -306,3 +402,6 @@ INSERT OR IGNORE INTO schema_version VALUES (9);
 INSERT OR IGNORE INTO schema_version VALUES (10);
 INSERT OR IGNORE INTO schema_version VALUES (11);
 INSERT OR IGNORE INTO schema_version VALUES (12);
+INSERT OR IGNORE INTO schema_version VALUES (13);
+INSERT OR IGNORE INTO schema_version VALUES (14);
+INSERT OR IGNORE INTO schema_version VALUES (15);

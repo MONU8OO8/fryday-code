@@ -13,6 +13,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/db.js';
+import { forgetProject, refreshProject } from '../knowledge/graph.js';
 import { listRepos, getRepo, overrideRepo, setVerified, saveProject, removeProject, ProjectError } from '../registry/registry.js';
 import { detectProject, cloneRepository, DetectError } from '../registry/detect.js';
 import { getConfig } from '../config.js';
@@ -85,6 +86,7 @@ registryRouter.post('/', (req, res) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid project', issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) }); return; }
   if (getRepo(parsed.data.id)) { res.status(409).json({ error: `A project with the id ${parsed.data.id} already exists` }); return; }
   respond(res, () => saveProject(parsed.data), 201);
+  if (getRepo(parsed.data.id)) void refreshProject(parsed.data.id).catch(() => undefined);
 });
 
 registryRouter.patch('/:id', (req, res) => {
@@ -92,6 +94,7 @@ registryRouter.patch('/:id', (req, res) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid project facts', issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) }); return; }
   if (!getRepo(req.params['id'])) { res.status(404).json({ error: 'Project not found' }); return; }
   respond(res, () => overrideRepo(req.params['id'], parsed.data));
+  if (parsed.data.prodBranch || parsed.data.localPath) void refreshProject(req.params['id']).catch(() => undefined);
 });
 
 registryRouter.post('/:id/verify', (req, res) => {
@@ -104,5 +107,6 @@ registryRouter.delete('/:id', (req, res) => {
   const busy = getDb().prepare(`SELECT COUNT(*) AS n FROM task_workspaces WHERE repo_id = ? AND removed_at IS NULL`).get(id) as { n: number };
   if (busy.n > 0) { res.status(409).json({ error: 'This project still has task workspaces; discard them first' }); return; }
   if (!removeProject(id)) { res.status(404).json({ error: 'Project not found' }); return; }
+  forgetProject(id);
   res.json({ ok: true });
 });
