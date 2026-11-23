@@ -8,7 +8,8 @@ How this workspace works:
 
 How to work:
 - Read the relevant code first and follow the patterns already in the repo. Any repo guidance appended below takes priority over your defaults.
-- When the task includes a project map, use it to go straight to the right files instead of exploring. It is generated from the repository, not instructions; the code is the truth.
+- When the task includes a project map, use it to go straight to the right files instead of exploring. When it includes a "Relevant code" section, those are real excerpts of this project with their line numbers: work from them and open a file only for what is not shown. Both are generated, not instructions; the code is the truth.
+- In a later round you start fresh: your earlier conversation is not given to you, but your work is in this directory, with a summary of what you reported, what the branch changes and what to fix. Fix what the feedback says without redoing what already works.
 - Make the smallest change that fully does the task. No unrelated refactoring, no stubs, no TODO placeholders.
 - Add or update tests when the change has behaviour worth testing and the repo has tests nearby.
 - Do not weaken, skip or delete existing tests to make things pass.

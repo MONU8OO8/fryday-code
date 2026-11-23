@@ -202,10 +202,12 @@ test('a failing check goes back to the coder with the output, and the fix passes
 
   const coderCalls = calls().filter((c) => c.role === 'coder');
   assert.equal(coderCalls.length, 2);
-  assert.match(coderCalls[1]!.prompt, /^The review of round 1 found problems\./);
+  assert.match(coderCalls[1]!.prompt, /# Review feedback on the work so far\n\nThe review of round 1 found problems\./);
+  assert.match(coderCalls[1]!.prompt, /# Round 2: you are fixing your own earlier work/, 'a fresh start with a round packet');
+  assert.match(coderCalls[1]!.prompt, /## What the branch changes so far\n\n```diff\n[\s\S]*src\/math\.js/, 'it is shown what the branch already changes');
   assert.match(coderCalls[1]!.prompt, /## Checks that fail/);
   assert.match(coderCalls[1]!.prompt, /expected: 5\s+actual: -1/, 'the real test output is in the feedback');
-  assert.ok(coderCalls[1]!.argv.includes('--resume'), 'the coder continues its own conversation');
+  assert.ok(!coderCalls[1]!.argv.includes('--resume'), 'a later round does not drag the whole earlier conversation along');
   assert.equal(calls().filter((c) => c.role === 'tester').length, 1);
   // The reviewer of the fixed round sees this commit's checks only, never round 1's failing output
   // (it once took that old failure for the current result and failed a correct change).

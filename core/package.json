@@ -40,11 +40,12 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
-    "test": "node --import tsx --test test/*.test.ts",
-    "test:ci": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "test": "FRYDAY_EMBED=off node --import tsx --test test/*.test.ts",
+    "test:ci": "FRYDAY_EMBED=off node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "redteam": "tsx scripts/redteam.ts",
     "e2e": "tsx scripts/e2e-loop.ts",
+    "token-bench": "tsx scripts/token-bench.ts",
     "fresh": "tsx scripts/fresh-install.ts",
     "intake": "tsx scripts/intake-check.ts",
     "open": "tsx scripts/open.ts",
@@ -61,6 +62,7 @@
     "@playwright/mcp": "0.0.86",
     "better-sqlite3": "^9.6.0",
     "express": "^5.3.0",
+    "sqlite-vec": "0.1.9",
     "tsx": "^4.23.15",
     "zod": "^3.23.8"
   },
@@ -72,5 +74,8 @@
   },
   "engines": {
     "node": ">=22.12"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "4.3.2"
   }
 }

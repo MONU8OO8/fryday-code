@@ -138,7 +138,8 @@ export function retroRecord(taskId: string, reason: RetroReason): string {
   const rounds = getRounds(taskId);
   const reports = new Map((getDb().prepare(`SELECT round, result_text FROM runs WHERE task_id = ? AND role = 'coder' AND state = 'completed' AND result_text IS NOT NULL ORDER BY started_at`).all(taskId) as Array<{ round: number; result_text: string }>).map((r) => [r.round, r.result_text]));
   const owner = listMessages(taskId).filter((m) => m.author === 'owner' && m.kind === 'note').slice(-10).map((m) => `- ${clean(m.body, 400)}`);
-  const known = LESSON_ROLES.flatMap((role) => activeLessonsFor(role, projectId).map((l) => `- (${role}) ${l.text}`));
+  // Enough to avoid repeats; the Reflector does not need every lesson there is.
+  const known = LESSON_ROLES.flatMap((role) => activeLessonsFor(role, projectId).map((l) => `- (${role}) ${clean(l.text, 240)}`)).slice(0, 40);
   const note = taskMetadata(task)['note'];
 
   return [

@@ -18,6 +18,7 @@
  *                machine to prove its guarantees on yet.
  */
 
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -91,6 +92,24 @@ export interface AgentRunner {
 
 // ─── Claude Code ──────────────────────────────────────────────────────────────
 
+const DYNAMIC_SECTIONS_FLAG = '--exclude-dynamic-system-prompt-sections';
+const helpCache = new Map<string, string>();
+
+/** Whether this CLI knows a flag, from its --help, asked once per binary. An unknown flag would stop every run. */
+export function supportsFlag(bin: string, flag: string): boolean {
+  if (process.env['FRYDAY_CLI_FLAGS_OFF'] === '1') return false;
+  let help = helpCache.get(bin);
+  if (help === undefined) {
+    try {
+      help = execFileSync(bin, ['--help'], { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      help = '';
+    }
+    helpCache.set(bin, help);
+  }
+  return help.includes(flag);
+}
+
 export const claudeRunner: AgentRunner = {
   id: 'claude',
   label: 'Claude Code',
@@ -123,6 +142,10 @@ export const claudeRunner: AgentRunner = {
       flags.push('--mcp-config', input.mcp.configPath);
     }
     if (input.appendSystemPrompt) flags.push('--append-system-prompt', input.appendSystemPrompt);
+    // Every run works in its own folder, so the per-machine part of Claude Code's own system prompt
+    // (folder, git status) differs each time and nothing before it could be reused from the prompt
+    // cache. Moved to the first message, the long fixed part is the same for every run of a role.
+    if (supportsFlag(cfg.claudeBin, DYNAMIC_SECTIONS_FLAG)) flags.push(DYNAMIC_SECTIONS_FLAG);
     if (input.resumeSessionId) flags.push('--resume', input.resumeSessionId);
     if (input.jsonSchema) flags.push('--json-schema', JSON.stringify(input.jsonSchema));
     return { bin: cfg.claudeBin, args: flags, stdinText: input.prompt, env: {}, cleanup: () => undefined };

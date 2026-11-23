@@ -8,6 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import { isBlocking, type CheckResult } from './checks.js';
 import { hasBlockingFlag, type DiffFlag } from './diffFlags.js';
+import { budgetedDiff } from './diffBudget.js';
 
 // ─── Plan ─────────────────────────────────────────────────────────────────────
 
@@ -303,13 +304,43 @@ export interface ReviewBrief {
   ownerNotes?: string;
   /** Lessons approved by the owner for the Checker (learning/inject.ts), already a Markdown section. */
   lessons?: string;
+  /** The last round the Checker judged: what it found, and the diff from that commit to this one. */
+  lastReview?: { round: number; verdict: Verdict; patchSince: string } | null;
 }
 
+/** How much of the change goes into the brief itself; the whole of it stays in diff.patch. */
+export const BRIEF_DIFF_CHARS = 24_000;
+const SINCE_DIFF_CHARS = 16_000;
+
 const EARLIER_CHARS = 5000;
+
 /** Quoted feedback keeps its structure but cannot look like a section of this brief. */
 const demoteHeadings = (text: string) => text.replace(/^(#{1,3}) /gm, '#### ');
 
 export const REVIEW_DIR = 'FRYDAY_REVIEW';
+
+/** The change, as the brief shows it: what changed since the last review first, then the whole change within a budget. */
+function changeSections(brief: ReviewBrief): string[] {
+  const focus = [brief.plan?.criteria.join('\n') ?? '', brief.description].join('\n');
+  const out: string[] = [];
+  const last = brief.lastReview;
+  if (last) {
+    const open = [
+      ...last.verdict.criteria.filter((c) => !c.met).map((c) => `- Criterion not met: ${c.criterion}${c.evidence ? ` (${c.evidence})` : ''}`),
+      ...last.verdict.issues.filter((i) => i.severity === 'blocking').map((i) => `- Blocking: ${i.file ? `${i.file}: ` : ''}${i.description}`),
+    ];
+    out.push(`## What the last review found (round ${last.round})\n\nYou, the Checker, reviewed round ${last.round} and sent it back. Check first whether each of these is fixed now, then review the rest as usual:\n\n${open.length ? open.join('\n') : demoteHeadings(last.verdict.summary)}`);
+    const since = budgetedDiff(last.patchSince, SINCE_DIFF_CHARS, `${open.join('\n')}\n${focus}`);
+    out.push(since.text.trim()
+      ? `## What changed since round ${last.round}\n\n\`\`\`diff\n${since.text}\n\`\`\``
+      : `## What changed since round ${last.round}\n\nNothing: the commit is the one you reviewed.`);
+  }
+  const whole = budgetedDiff(brief.patch, last ? Math.round(BRIEF_DIFF_CHARS / 2) : BRIEF_DIFF_CHARS, focus);
+  out.push(whole.complete
+    ? `## The whole change\n\nThe same as \`diff.patch\` in this folder:\n\n\`\`\`diff\n${whole.text}\n\`\`\``
+    : `## The whole change\n\nThe most relevant parts are below; \`diff.patch\` in this folder has all of it. Open it for anything listed as not shown.\n\n\`\`\`diff\n${whole.text}\n\`\`\``);
+  return out;
+}
 
 /** Write the tester's brief into its throwaway checkout. */
 export function writeReviewBrief(checkoutPath: string, brief: ReviewBrief): void {
@@ -341,7 +372,7 @@ export function writeReviewBrief(checkoutPath: string, brief: ReviewBrief): void
         brief.earlier.map((e) => `### Round ${e.round} (an earlier commit)\n\n${tail(demoteHeadings(e.feedback), EARLIER_CHARS)}`).join('\n\n')
       : '',
     brief.lessons ?? '',
-    '## The change\n\nSee `diff.patch` in this folder.',
+    ...changeSections(brief),
   ].filter(Boolean).join('\n\n');
 
   fs.writeFileSync(path.join(dir, 'README.md'), `${readme}\n`);

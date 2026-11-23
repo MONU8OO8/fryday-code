@@ -91,22 +91,62 @@ export function copyAttachments(taskId: string, destDir: string): string[] {
   });
 }
 
-const MAX_INLINE_CHARS = 30_000;
+const MAX_INLINE_CHARS = 12_000;
+
+const termsOf = (text: string) => new Set((text.toLowerCase().match(/[a-z][a-z0-9_]{2,}/g) ?? []));
+
+/** A document cut at its headings (or every 40 lines when it has none). */
+function sections(text: string): Array<{ title: string; text: string }> {
+  const lines = text.split('\n');
+  const out: Array<{ title: string; text: string }> = [];
+  let title = '(start)';
+  let buf: string[] = [];
+  const flush = () => { if (buf.join('').trim()) out.push({ title, text: buf.join('\n').trim() }); buf = []; };
+  for (const line of lines) {
+    const h = line.match(/^#{1,4}\s+(.+)/);
+    if (h || buf.length >= 40) { flush(); if (h) title = h[1]!.trim().slice(0, 100); }
+    buf.push(line);
+  }
+  flush();
+  return out;
+}
 
 /**
  * The task's text documents as one block, for agents that cannot be handed the files.
  * A PDF is not inlined: the Analyst has read it and its requirements are in the brief.
+ * Documents longer than the budget are cut at their headings and the sections that share
+ * the most words with the task are shown, in their order; the others are named, not shown.
  */
-export function documentsText(taskId: string, maxChars = MAX_INLINE_CHARS): string {
+export function documentsText(taskId: string, maxChars = MAX_INLINE_CHARS, about = ''): string {
   const all = rows(taskId).filter((r) => fs.existsSync(r.stored_path));
   if (all.length === 0) return '';
+  const docs = all.map((r) => ({ r, text: r.media === 'pdf' ? '' : fs.readFileSync(r.stored_path, 'utf8').trim() }));
+  const total = docs.reduce((s, d) => s + d.text.length, 0);
+  if (total <= maxChars) {
+    const parts = docs.map(({ r, text }) => r.media === 'pdf'
+      ? `### ${r.name}\n\n(A PDF. The Analyst read it; what it requires is listed in the requirements.)`
+      : `### ${r.name}\n\n${text}`);
+    return `## Documents from the owner\n\n${parts.join('\n\n')}`;
+  }
+  const want = termsOf(about);
+  const all_sections = docs.flatMap(({ r, text }, di) => sections(text).map((sec, si) => {
+    let shared = 0;
+    for (const t of termsOf(`${sec.title} ${sec.text}`)) if (want.has(t)) shared++;
+    return { di, si, name: r.name, ...sec, score: shared / Math.sqrt(sec.text.length + 50) + (si === 0 ? 0.05 : 0) };
+  }));
+  const chosen = new Set<string>();
   let left = maxChars;
-  const parts = all.map((r) => {
+  for (const sec of [...all_sections].sort((a, b) => b.score - a.score)) {
+    if (sec.text.length > left) continue;
+    chosen.add(`${sec.di}:${sec.si}`);
+    left -= sec.text.length;
+  }
+  const parts = docs.map(({ r }, di) => {
     if (r.media === 'pdf') return `### ${r.name}\n\n(A PDF. The Analyst read it; what it requires is listed in the requirements.)`;
-    const text = fs.readFileSync(r.stored_path, 'utf8').trim();
-    const shown = text.slice(0, Math.max(left, 0));
-    left -= shown.length;
-    return `### ${r.name}\n\n${shown}${shown.length < text.length ? '\n\n[cut: the rest of this document did not fit]' : ''}`;
+    const mine = all_sections.filter((x) => x.di === di);
+    const shown = mine.filter((x) => chosen.has(`${x.di}:${x.si}`)).map((x) => x.text);
+    const hidden = mine.filter((x) => !chosen.has(`${x.di}:${x.si}`)).map((x) => x.title);
+    return `### ${r.name}\n\n${shown.join('\n\n')}${hidden.length ? `\n\n[Not shown, to stay short: ${hidden.slice(0, 20).join('; ')}. The requirements in the brief cover the whole document.]` : ''}`;
   });
-  return `## Documents from the owner\n\n${parts.join('\n\n')}`;
+  return `## Documents from the owner (the parts that bear on this task)\n\n${parts.join('\n\n')}`;
 }

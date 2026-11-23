@@ -49,12 +49,14 @@ const MAX_TOTAL_BYTES = 24 * 1024 * 1024;
 const LIST_CAP = 200;
 
 /** A real env file: `.env`, `.env.local`, `.env.production`… Never opened. */
+export { SKIP_DIRS, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES };
+
 export const isRealEnvFile = (file: string): boolean => {
   const base = file.split('/').pop() ?? '';
   return /^\.env(\..+)?$/.test(base) && !ENV_EXAMPLE.test(file);
 };
 
-const skipped = (file: string) => file.split('/').slice(0, -1).some((d) => SKIP_DIRS.has(d)) || /\.(min|bundle)\.js$/.test(file) || /\.d\.ts$/.test(file);
+export const skipped = (file: string) => file.split('/').slice(0, -1).some((d) => SKIP_DIRS.has(d)) || /\.(min|bundle)\.js$/.test(file) || /\.d\.ts$/.test(file);
 
 /** The files worth opening, most telling first; null for a file never to open. */
 function rank(file: string): number | null {
@@ -253,21 +255,21 @@ export function productionSha(repoPath: string, prodBranch: string): string {
   throw new Error(`no commit for ${prodBranch} (neither origin/${prodBranch} nor a local branch)`);
 }
 
-/** Every path at the commit, with its size. */
-function listTree(repoPath: string, sha: string): Array<{ path: string; size: number }> {
+/** Every path at the commit, with its size and blob id. */
+export function listTree(repoPath: string, sha: string): Array<{ path: string; size: number; blob: string }> {
   const out = execFileSync('git', ['-C', repoPath, ...NO_HOOKS, 'ls-tree', '-r', '-z', '--long', sha], {
     encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...GIT_ENV }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   return out.split('\0').filter(Boolean).flatMap((entry) => {
     const tab = entry.indexOf('\t');
-    const [, type, , size] = entry.slice(0, tab).split(/\s+/);
+    const [, type, blob, size] = entry.slice(0, tab).split(/\s+/);
     const file = entry.slice(tab + 1);
-    return type === 'blob' && !file.includes('\n') ? [{ path: file, size: Number(size) || 0 }] : [];
+    return type === 'blob' && !file.includes('\n') ? [{ path: file, size: Number(size) || 0, blob: blob! }] : [];
   });
 }
 
 /** The contents of `paths` at `sha`, in one `git cat-file --batch`. */
-function readBlobs(repoPath: string, sha: string, paths: string[]): Promise<ScanFile[]> {
+export function readBlobs(repoPath: string, sha: string, paths: string[]): Promise<ScanFile[]> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', repoPath, ...NO_HOOKS, 'cat-file', '--batch'], {
       env: { ...process.env, ...GIT_ENV }, stdio: ['pipe', 'pipe', 'pipe'],

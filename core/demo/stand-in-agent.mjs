@@ -37,6 +37,8 @@ const delay = Number(process.env.FAKE_DELAY_MS ?? '0');
 const role = process.env.FRYDAY_ROLE;
 const planFile = process.env.FAKE_PLAN_FILE;
 const argv = process.argv.slice(2);
+// Asked what it supports (core reads --help once): it is a stand-in, it supports nothing extra.
+if (argv.includes('--help')) { process.stdout.write('stand-in agent\n'); process.exit(0); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 

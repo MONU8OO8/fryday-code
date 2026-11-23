@@ -7,6 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { Plan } from '../pipeline/review.js';
+import { budgetedDiff } from '../pipeline/diffBudget.js';
 
 export type TesterKind = 'api' | 'ui';
 export const TESTER_ROLE = { api: 'api_tester', ui: 'ui_tester' } as const;
@@ -188,6 +189,15 @@ export interface VerifyBrief {
 }
 
 /** Write a tester's brief into its checkout. */
+const TESTER_DIFF_CHARS = 10_000;
+
+/** The change for a tester, who tries the service rather than reading code: the files, and the diff within a budget. */
+function changeForTester(brief: VerifyBrief): string {
+  const files = `Files changed:\n${brief.files.map((f) => `- ${f.status} ${f.path}`).join('\n')}`;
+  const diff = budgetedDiff(brief.patch, TESTER_DIFF_CHARS, [brief.plan?.criteria.join('\n') ?? '', brief.earlier ?? ''].join('\n'));
+  return `## The change\n\n${files}\n\n${diff.complete ? 'The whole diff' : 'The most relevant parts of the diff'} (all of it is in \`diff.patch\` in this folder):\n\n\`\`\`diff\n${diff.text}\n\`\`\``;
+}
+
 export function writeVerifyBrief(checkoutPath: string, brief: VerifyBrief): void {
   const dir = path.join(checkoutPath, VERIFY_DIR);
   fs.mkdirSync(path.join(checkoutPath, BROWSER_DIR), { recursive: true });
@@ -217,7 +227,7 @@ export function writeVerifyBrief(checkoutPath: string, brief: VerifyBrief): void
     brief.kind === 'api' ? `## Data you may read\n\n${data}${missing}` : '',
     brief.earlier ? `## Found in an earlier round\n\nThese were sent back to the coder. Check first that each one is really fixed:\n\n${brief.earlier}` : '',
     brief.before ? `## Before you\n\n${brief.before}` : '',
-    `## The change\n\nFiles changed:\n${list(brief.files.map((f) => `${f.status} ${f.path}`))}\n\nSee \`diff.patch\` in this folder for exactly what changed.`,
+    changeForTester(brief),
   ].filter(Boolean).join('\n\n');
 
   fs.writeFileSync(path.join(dir, 'README.md'), `${readme}\n`);

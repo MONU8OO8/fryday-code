@@ -66,6 +66,10 @@ import {
 } from './review.js';
 import { refreshWithin } from '../knowledge/graph.js';
 import { projectMap } from '../knowledge/digest.js';
+import { codePackFor } from '../knowledge/index/forTask.js';
+import { rememberTask, similarTasks } from '../knowledge/index/memory.js';
+import { kickEmbedding } from '../knowledge/index/indexer.js';
+import { budgetedDiff } from './diffBudget.js';
 
 const prompt = (name: string) => fs.readFileSync(path.join(__dirname, '..', 'agents', 'prompts', `${name}.md`), 'utf8').trim();
 const PLANNER_PROMPT = prompt('planner');
@@ -238,7 +242,9 @@ function guided(base: string, repoName: string, roots: string[]): string {
 /** What the owner added to the task after writing it: notes in the thread and attached documents. */
 function fromTheOwner(taskId: string, sinceMs = 0): string {
   const notes = ownerNotes(taskId, sinceMs);
-  const documents = sinceMs === 0 ? documentsText(taskId) : '';
+  const task = getTask(taskId);
+  // Long documents are cut to the parts that bear on the task (the Analyst read them whole).
+  const documents = sinceMs === 0 ? documentsText(taskId, undefined, task ? `${task.title}\n${task.description}\n${parseBrief(task.brief_json)?.summary ?? ''}` : '') : '';
   return [
     notes.length ? `## Notes from the owner\n\n${notes.map((n) => `- ${n}`).join('\n')}` : '',
     documents,
@@ -634,6 +640,10 @@ async function startPlanner(taskId: string): Promise<void> {
 }
 
 async function startPlannerRun(taskId: string, task: TaskRow, ws: WorkspaceRow, brief: Brief | null, folder: string): Promise<void> {
+  // Code the task is about, found by searching the project, so the Planner reads less to plan.
+  const about = [task.title, task.description, brief?.summary ?? '', ...(brief?.areas ?? [])].join('\n');
+  const code = await codePackFor(taskId, ws, 'planner', about);
+  const past = await similarTasks(taskId, ws.repo_id, about);
   const run = await startTaskAgent(taskId, { role: 'planner', round: 0 }, {
     taskId,
     role: 'planner',
@@ -643,6 +653,8 @@ async function startPlannerRun(taskId: string, task: TaskRow, ws: WorkspaceRow, 
       fromTheOwner(taskId),
       existingWork(ws),
       projectMap(taskId, ws.repo_id),
+      code,
+      past,
       lessonsFor(taskId, 'planner', ws.repo_id, { text: `${task.title}\n${task.description}`, areas: brief?.areas }),
     ].filter(Boolean).join('\n\n'),
     appendSystemPrompt: withGuidance(PLANNER_PROMPT, getRepo(ws.repo_id), ws),
@@ -675,37 +687,83 @@ function onPlannerExit(exit: RunExit, run: RunRow): void {
 
 // ─── Coding ───────────────────────────────────────────────────────────────────
 
+/** How long after a Builder run its prompt cache is still warm enough to resume it cheaply. */
+const WARM_RESUME_MS = 4 * 60_000;
+const REPORT_CHARS = 2500;
+const ROUND_DIFF_CHARS = 14_000;
+
+interface CoderRun { session_id: string | null; round: number; started_at: number; ended_at: number | null; result_text: string | null }
+
+/**
+ * Where a later round starts from, instead of the whole earlier conversation: the task, the plan,
+ * what the Builder reported, what the branch already changes, the feedback, and the code around
+ * it. A resumed conversation grows every round and is written to the cache again on a model
+ * switch; this stays about the same size.
+ */
+async function roundPacket(task: TaskRow, ws: WorkspaceRow, plan: Plan | null, round: number, feedback: string, last: CoderRun | undefined): Promise<string> {
+  let diff = '';
+  try {
+    diff = budgetedDiff(diffPatch(ws.worktree_path, ws.base_sha), ROUND_DIFF_CHARS, `${feedback}\n${plan?.criteria.join('\n') ?? ''}`).text;
+  } catch {
+    /* no commit yet: the Builder starts from the plan */
+  }
+  const files = ws.files_json ? (JSON.parse(ws.files_json) as Array<{ path: string }>).map((f) => f.path) : [];
+  const report = last?.result_text ? last.result_text.slice(0, REPORT_CHARS) + (last.result_text.length > REPORT_CHARS ? ' […]' : '') : '';
+  const code = await codePackFor(task.id, ws, 'coder_round', `${feedback}\n${plan?.criteria.join('\n') ?? task.title}`, [...files, ...(plan?.files ?? [])]);
+  return [
+    `Task ${task.id}: ${task.title}\n\n${task.description}`,
+    plan ? planText(plan) : '',
+    fromTheOwner(task.id),
+    `# Round ${round}: you are fixing your own earlier work\n\nThis is a fresh start for you: your earlier conversation is not here, but your work is, in this workspace (the files as you left them). Below is what you reported last time, what the branch changes so far, and what has to be fixed.`,
+    report ? `## What you reported last round\n\n${report}` : '',
+    diff ? `## What the branch changes so far\n\n\`\`\`diff\n${diff}\n\`\`\`` : '',
+    `# Review feedback on the work so far\n\n${feedback}`,
+    code,
+  ].filter(Boolean).join('\n\n');
+}
+
 async function startCoder(taskId: string, round: number, feedback: string | null): Promise<void> {
   const task = getTask(taskId)!;
   const ws = activeWorkspace(taskId)!;
   const plan = planOf(task);
 
-  // Later rounds continue the coder's own conversation, so it keeps what it learned.
   const previous = getDb()
-    .prepare(`SELECT session_id, started_at FROM runs WHERE task_id = ? AND role = 'coder' AND session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1`)
-    .get(taskId) as { session_id: string; started_at: number } | undefined;
-  // Only a fresh coder session reads this; a resumed one already has the map and lessons from round 1.
-  const fresh = feedback === null || !previous;
-  const taskText = fresh
-    ? [
-        `Task ${task.id}: ${task.title}\n\n${task.description}`, plan ? planText(plan) : '', fromTheOwner(taskId), existingWork(ws), projectMap(taskId, ws.repo_id),
-        lessonsFor(taskId, 'coder', ws.repo_id, { text: `${task.title}\n${task.description}`, areas: parseBrief(task.brief_json)?.areas, files: plan?.files }),
-      ].filter(Boolean).join('\n\n')
-    : '';
-  // What the owner said since the coder last started is new to it.
-  const said = previous ? fromTheOwner(taskId, previous.started_at) : '';
-  const withNotes = (text: string) => (said ? `${text}\n\n${said}` : text);
+    .prepare(`SELECT session_id, round, started_at, ended_at, result_text FROM runs WHERE task_id = ? AND role = 'coder' AND session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1`)
+    .get(taskId) as CoderRun | undefined;
+  // Resumed only to finish a run that was cut off a moment ago on the same model: then the
+  // conversation is still in the prompt cache. Every other later round starts fresh from a packet.
+  const interrupted = feedback === CONTINUE_PROMPT || feedback === RETRY_PROMPT;
+  const warm = !!previous?.session_id && previous.ended_at !== null && Date.now() - previous.ended_at < WARM_RESUME_MS
+    // The model this round gets is the one the cut-off run had (no escalation in between).
+    && runSettingsFor('coder', previous.round).model === runSettingsFor('coder', round).model;
+  const resume = interrupted && warm ? previous!.session_id! : undefined;
 
   if (taskTokensLeft(taskId) <= 0) { askToContinue(taskId, { role: 'coder', round }, 'task'); return; }
   const continuing = feedback === CONTINUE_PROMPT;
   enterState(taskId, 'coding', continuing ? `Round ${round}: continuing after the token limit` : feedback === RETRY_PROMPT ? `Round ${round}: trying again after the AI service was busy` : feedback?.startsWith(OWNER_REWORK_PROMPT) ? `Round ${round}: fixing what you found` : round === 1 ? `Coding on ${ws.branch}` : `Round ${round}: fixing what the review found`);
+
+  let prompt: string;
+  if (resume) {
+    // What the owner said since the coder last started is new to it.
+    const said = fromTheOwner(taskId, previous!.started_at);
+    prompt = said ? `${feedback}\n\n${said}` : feedback!;
+  } else if (feedback === null) {
+    const code = await codePackFor(taskId, ws, 'coder', [plan?.summary ?? task.title, plan?.approach ?? task.description, ...(plan?.criteria ?? [])].join('\n'), plan?.files ?? []);
+    prompt = [
+      `Task ${task.id}: ${task.title}\n\n${task.description}`, plan ? planText(plan) : '', fromTheOwner(taskId), existingWork(ws), projectMap(taskId, ws.repo_id), code,
+      lessonsFor(taskId, 'coder', ws.repo_id, { text: `${task.title}\n${task.description}`, areas: parseBrief(task.brief_json)?.areas, files: plan?.files }),
+    ].filter(Boolean).join('\n\n');
+  } else {
+    prompt = await roundPacket(task, ws, plan, round, feedback, previous);
+  }
+  if (getTask(taskId)?.state !== 'coding') return; // stopped while the packet was being put together
   await startTaskAgent(taskId, { role: 'coder', round }, {
     taskId,
     role: 'coder',
     round,
-    prompt: feedback === null ? taskText : previous ? withNotes(feedback) : `${taskText}\n\n# Review feedback on the work so far\n\n${feedback}`,
+    prompt,
     appendSystemPrompt: withGuidance(CODER_PROMPT, getRepo(ws.repo_id), ws),
-    resumeSessionId: feedback !== null ? previous?.session_id : undefined,
+    resumeSessionId: resume,
     cwd: ws.worktree_path,
     workspacePath: ws.worktree_path,
   });
@@ -815,6 +873,16 @@ export async function reviewRound(taskId: string, round: number): Promise<void> 
     return;
   }
 
+  // The last round the Checker itself judged: this round is a re-check of what it found there.
+  const judged = getRounds(taskId).filter((r) => r.round < round && r.verdict && r.headSha).at(-1);
+  let lastReview: { round: number; verdict: Verdict; patchSince: string } | null = null;
+  if (judged) {
+    try {
+      lastReview = { round: judged.round, verdict: judged.verdict!, patchSince: git(ws.worktree_path, ['diff', '-U3', `${judged.headSha}..HEAD`]) };
+    } catch {
+      lastReview = null; // that commit is gone (the branch was rebuilt): review the whole change
+    }
+  }
   writeReviewBrief(checkout, {
     taskId, title: task.title, description: task.description, round, plan: planOf(task), checks, flags,
     depsNote: deps.detail, patch: diffPatch(ws.worktree_path, ws.base_sha), ownerNotes: fromTheOwner(taskId),
@@ -823,6 +891,7 @@ export async function reviewRound(taskId: string, round: number): Promise<void> 
     // passed on: the checks above are run again on this commit and are the only ones that count.
     earlier: getRounds(taskId).filter((r) => r.round < round && r.feedback && r.verify?.status === 'failed').slice(-2).map((r) => ({ round: r.round, feedback: r.feedback! })),
     lessons: lessonsFor(taskId, 'tester', ws.repo_id, { text: `${task.title}\n${task.description}`, areas: parseBrief(task.brief_json)?.areas, files: planOf(task)?.files }),
+    lastReview,
   });
   if (taskTokensLeft(taskId) <= 0) {
     removeCheckout(ws.repo_path, checkout);
@@ -836,6 +905,8 @@ export async function reviewRound(taskId: string, round: number): Promise<void> 
     round,
     prompt: `Review round ${round} of task ${task.id}. Your brief is in FRYDAY_REVIEW/README.md.`,
     appendSystemPrompt: withGuidance(TESTER_PROMPT, repo, ws),
+    // Confirming fixes to its own findings needs less than a first review: a cheaper model, when set.
+    ...(lastReview && getSettings().recheckModel && !process.env.FRYDAY_MODEL ? { model: getSettings().recheckModel! } : {}),
     jsonSchema: VERDICT_SCHEMA,
     cwd: checkout,
     workspacePath: checkout,
@@ -927,6 +998,8 @@ function approveRound(taskId: string, round: number, verified: string | null): v
   setTaskState(taskId, 'awaiting_approval', `${passed}.`);
   setTaskNote(taskId, `${passed}. ${requestNextApproval(taskId)}`);
   sseEmit({ type: 'round_updated', taskId, round });
+  rememberTask(taskId);
+  kickEmbedding();
 }
 
 /** Send the round back to the coder, or to the owner once the round limit is reached. */

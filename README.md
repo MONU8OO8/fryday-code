@@ -88,6 +88,12 @@ Or run the same demo locally with `npx fryday-code demo` (see [Install](#install
   which project calls which on the Graph page. Links it guessed from names stay dashed until you confirm
   them; your edits survive every rescan. Agents get a short map of the project and its neighbours
   instead of exploring the repository again.
+- **Spends fewer tokens.** Each project's code is indexed (keyword search with SQLite FTS5, search by
+  meaning with a small embedding model that runs on your machine; no code leaves it). The Planner and the
+  Builder are handed the code a task is about instead of exploring for it, a later Builder round starts
+  fresh from a short summary instead of carrying the whole earlier conversation, the Checker re-checks only
+  what changed since its last review, and finished tasks are remembered for the next like them.
+  `npm run token-bench` measures tokens per finished task.
 - **Learns, with you as the gate.** The Builder rates its own work against each criterion, and its
   scorecard shows how often it was right. When a task is sent back, stopped or fails a round, the
   Reflector, an agent with no tools at all, reads what happened and proposes at most three lessons.

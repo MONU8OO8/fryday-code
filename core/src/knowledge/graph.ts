@@ -15,6 +15,7 @@ import { getRepo, listRepos, type Project } from '../registry/registry.js';
 import { sseEmit } from '../api/events.js';
 import { shortenPaths } from '../runner/runEvents.js';
 import { cleanLabel, productionSha, scanRepository, type ScanFacts } from './scan.js';
+import { indexProject } from './index/indexer.js';
 
 export type NodeKind = 'project' | 'external_service' | 'endpoint' | 'env_key';
 export type EdgeKind = 'calls' | 'exposes' | 'served_by';
@@ -370,7 +371,11 @@ export function refreshProject(projectId: string, opts: { force?: boolean } = {}
       return scanStatus(projectId);
     }
     const last = scanStatus(projectId);
-    if (!opts.force && last && last.sha === sha && !last.error) return last;
+    if (!opts.force && last && last.sha === sha && !last.error) {
+      // The scan is current; the index may not be yet (it came later). It does nothing when it is.
+      if (process.env['FRYDAY_INDEX'] !== 'off') void indexProject(projectId).catch(() => null);
+      return last;
+    }
     try {
       const facts = await scanRepository(project.localPath, sha);
       applyScan(project, facts);
@@ -379,6 +384,8 @@ export function refreshProject(projectId: string, opts: { force?: boolean } = {}
       record(sha, null, `The scan could not read ${project.prodBranch}: ${(err as Error).message}`);
     }
     sseEmit({ type: 'graph_updated', projectId });
+    // The code index follows the same commit; it reads only blobs it has not seen, in the background.
+    if (process.env['FRYDAY_INDEX'] !== 'off') void indexProject(projectId).catch(() => null);
     return scanStatus(projectId);
   })().finally(() => inFlight.delete(projectId));
   inFlight.set(projectId, job);

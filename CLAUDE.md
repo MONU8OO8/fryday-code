@@ -10,7 +10,7 @@ this repo decides what those agents can touch. Treat every change as security-re
   the testers are not offered (`verify/service.ts` `serviceUnreachableReason`).
   - `runner/` starts and follows agents; `runner/runners.ts` holds the engines (Claude Code, Cursor CLI, SSH stub) · `guard/` what an agent may do · `pipeline/` the task flow,
     intake, checks, verification, pushes, release · `verify/` the service under test, the testers' tools
-    and reports · `registry/` projects · `connections/` what works on this machine and which MCP servers
+    and reports · `knowledge/` project scan, service graph and the code index (`knowledge/index/`: what agents are given as relevant code; data only, never a tool) · `registry/` projects · `connections/` what works on this machine and which MCP servers
     a tester may read from · `deploy/` Jenkins and the staging deploy · `chatin/` reading the owner's Chat
     space (Google sign-in, commands) · `notify/` tells the owner (toast,
     desktop notification, Chat space) · `api/` HTTP routes and auth ·
@@ -98,6 +98,7 @@ npm run intake    # when intake, questions, branch continuation or the Analyst's
 npm run redteam:verify  # when the testers, their tools, the service sandbox or data connections changed
 npm run verify    # when verification or a tester's prompt changed
 npm run deploy-check  # when release, deploy, Jenkins or alerts changed
+npm run token-bench -- --suite mid  # when what agents are given (prompts, packs, rounds) changed: tokens per passed task, against the saved baseline
 ```
 
 Rebuild the UI (`npm run build:ui`) after changing `ui/`, and look at it in a browser.

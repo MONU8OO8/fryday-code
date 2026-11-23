@@ -18,6 +18,7 @@
     "typecheck": "npm --prefix core run typecheck && npm --prefix ui run typecheck",
     "redteam": "npm --prefix core run redteam",
     "e2e": "npm --prefix core run e2e",
+    "token-bench": "npm --prefix core run token-bench --",
     "fresh": "npm --prefix core run fresh",
     "intake": "npm --prefix core run intake",
     "redteam:verify": "npm --prefix core run redteam:verify",

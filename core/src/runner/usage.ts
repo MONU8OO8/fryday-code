@@ -5,7 +5,11 @@
  *   - Each `assistant` event's message.id is one row per run. Claude streams the same message
  *     several times while it grows, so a repeat keeps the largest value of each counter: the
  *     live total is right, and a repeat of a finished message changes nothing.
- *   - On `--resume`, the final `result` event already includes the cumulative total.
+ *   - Each run's `result` event covers that run only, resumed or not: summing results per role
+ *     does not count a resumed session twice.
+ *   - The stream reports a message's output tokens as of its first chunk, often a tenth of the
+ *     real figure, so a live total runs a little low (output is about a tenth of counted tokens);
+ *     the result event replaces it when the run ends.
  *   - We store both individual assistant events and the final result, but aggregate queries
  *     should SUM only assistant events OR use the single result event per run — not both.
  */

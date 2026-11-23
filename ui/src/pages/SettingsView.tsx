@@ -13,6 +13,8 @@ interface Settings {
   taskTokenLimit: number;
   maxRounds: number;
   stagingApprovals: 'once' | 'each_step';
+  semanticSearch: boolean;
+  recheckModel: string | null;
   maxAgents: number;
   installDomains: string[];
   alerts: { mac: boolean };
@@ -144,6 +146,9 @@ export default function SettingsView() {
                       {label.name}
                     </div>
                     <div className="max-w-[16rem] text-xs text-hud-dim">{label.job}</div>
+                    {role === 'fryday' && /opus|fable/.test(rs.model) && (
+                      <div className="mt-1 max-w-[16rem] text-xs text-hud-amber">It only reads the task's record and answers; a smaller model such as Haiku is usually enough and costs far less per message.</div>
+                    )}
                   </td>
                   <td className="p-3 align-top">
                     {data.cursorRoles.includes(role) ? (
@@ -232,6 +237,23 @@ export default function SettingsView() {
             onChange={(e) => void save({ stagingApprovals: e.target.value as Settings['stagingApprovals'] }, 'Approvals on the way to staging')}>
             <option value="once">One yes</option>
             <option value="each_step">Every step</option>
+          </select>
+        </label>
+        <label className="flex flex-wrap items-center gap-3 p-4">
+          <span className="min-w-[14rem] flex-1 text-hud-bright">Search code by meaning
+            <span className="block text-xs text-hud-dim">FryDay finds the code a task is about and hands it to the agents, so they read less. On: by keyword and by meaning, with a small model that runs on this Mac (downloaded once, about 35 MB; no code leaves the Mac). Off: by keyword only.</span>
+          </span>
+          <input type="checkbox" className="h-4 w-4" checked={s.semanticSearch} aria-label="Search code by meaning"
+            onChange={(e) => void save({ semanticSearch: e.target.checked }, 'Search code by meaning')} />
+        </label>
+        <label className="flex flex-wrap items-center gap-3 p-4">
+          <span className="min-w-[14rem] flex-1 text-hud-bright">Checker model when it only re-checks its own findings
+            <span className="block text-xs text-hud-dim">From round 2, the Checker mostly confirms that what it found was fixed. A cheaper model is enough for that; a first review keeps the Checker's own model.</span>
+          </span>
+          <select className={clsx(cell, '!w-44')} value={s.recheckModel ?? ''} aria-label="Checker model for re-checks"
+            onChange={(e) => void save({ recheckModel: e.target.value || null }, 'Checker model for re-checks')}>
+            <option value="">Same as the Checker</option>
+            {data.models.map((m) => <option key={m} value={m}>{modelName(m)}</option>)}
           </select>
         </label>
         <label className="flex flex-wrap items-center gap-3 p-4">

@@ -149,8 +149,10 @@ export function dependencyOrder(projectIds: string[]): string[] {
 }
 
 /** For the Lead: the other projects with what each is, from the graph. */
+const LEAD_PROJECTS = 25;
+
 export function projectsForLead(excludeId: string | undefined): string[] {
-  return listRepos().filter((r) => r.verified && r.id !== excludeId).map((r) => {
+  return listRepos().filter((r) => r.verified && r.id !== excludeId).slice(0, LEAD_PROJECTS).map((r) => {
     const facts = scanFacts(r.id);
     const panel = facts ? projectPanel(r.id) : null;
     const callsProjects = (panel?.calls ?? []).filter((l) => l.to.startsWith('project:')).map((l) => l.to.slice(8));

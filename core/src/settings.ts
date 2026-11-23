@@ -68,6 +68,16 @@ const SettingsSchema = z.object({
    * Production is outside both: FryDay never deploys it and never answers a prompt about it.
    */
   stagingApprovals: z.enum(['once', 'each_step']),
+  /**
+   * Search code by meaning as well as by keyword. Uses a small embedding model that runs inside
+   * FryDay (downloaded once into the state folder); no code leaves the machine. Off: keyword only.
+   */
+  semanticSearch: z.boolean(),
+  /**
+   * The Checker's model for a later round that only re-checks earlier findings. A cheaper model
+   * is enough to confirm a fix; the first round, and any round with new work, keep the Checker's own.
+   */
+  recheckModel: z.enum(MODELS).nullable(),
   /** Agents running at the same time. */
   maxAgents: z.number().int().min(1).max(16),
   /** How the owner is nudged besides the Chat space: a macOS notification. The in-app toast is always on. */
@@ -107,6 +117,8 @@ export function defaultSettings(): Settings {
     taskTokenLimit: 4_000_000,
     maxRounds: envInt('FRYDAY_MAX_ROUNDS', 3),
     stagingApprovals: process.env['FRYDAY_STAGING_APPROVALS'] === 'each_step' ? 'each_step' : 'once',
+    semanticSearch: process.env['FRYDAY_EMBED'] !== 'off',
+    recheckModel: 'claude-sonnet-5-5',
     maxAgents: envInt('FRYDAY_MAX_AGENTS', 2),
     installDomains: ['registry.npmjs.org', 'registry.yarnpkg.com'],
     alerts: { mac: true },
