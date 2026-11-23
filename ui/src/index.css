@@ -119,6 +119,22 @@ code, .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo
   100% { transform: translate(calc(-50% + var(--dx)), var(--dy)); opacity: 0; }
 }
 
+/* The graph: a call flowing along its line, and a project with work in progress. */
+@keyframes graph-flow { to { stroke-dashoffset: -32; } }
+.graph-flow { stroke-dasharray: 2 30; animation: graph-flow 1.6s linear infinite; opacity: 0.9; }
+@keyframes graph-pulse { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.18); } }
+.graph-pulse { transform-box: fill-box; transform-origin: center; animation: graph-pulse 1.6s ease-out infinite; }
+
+/* A sheet rising from the bottom of a phone screen. */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+.sheet-up { animation: sheet-up 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+/* A drawer: rises from the bottom on a phone, slides in from the side on a wider screen. */
+.drawer-in { animation: sheet-up 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@media (min-width: 768px) { .drawer-in { animation: flow-in 0.35s ease-out; } }
+
 /* A screenshot arriving in the chat. */
 @keyframes shot-in {
   from { opacity: 0; transform: translateY(6px) scale(0.96); }
@@ -128,7 +144,7 @@ code, .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo
 
 @media (prefers-reduced-motion: reduce) {
   .flow-dash, .flow-ring, .flow-burst, .flow-bubble, .flow-in, .step-new, .animate-pulse,
-  .jr-pulse, .jr-pulse-amber, .jr-blink, .jr-burst, .chat-in, .typing span, .team-bob, .shot-in { animation: none !important; }
+  .jr-pulse, .jr-pulse-amber, .jr-blink, .jr-burst, .chat-in, .typing span, .team-bob, .shot-in, .sheet-up, .drawer-in, .graph-flow, .graph-pulse { animation: none !important; }
   .jr-token { transition: none !important; }
   .team-fly { display: none !important; }
 }

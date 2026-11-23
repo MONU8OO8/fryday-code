@@ -16,7 +16,7 @@ export default function HealthStrip() {
   return (
     <Link to="/health" aria-label={`Machine health: CPU ${Math.round(s.cpu.pct)}%, memory ${Math.round(s.memory.pct)}%${held ? `, new work held back: ${health.admission.why}` : ''}`}
       title={held ? `New work is held back: ${health.admission.why}` : 'Machine health'}
-      className={clsx('hidden md:flex items-center gap-3 rounded-full border px-3 py-1 text-xs tabular-nums transition-colors hover:bg-hud-border/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60',
+      className={clsx('hidden lg:flex items-center gap-3 rounded-full border px-3 py-1 text-xs tabular-nums transition-colors hover:bg-hud-border/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60',
         held ? 'border-hud-amber/50 bg-hud-amber/10' : 'border-hud-border')}>
       <span className={clsx('inline-flex items-center gap-1', tone(s.cpu.pct))}><Cpu aria-hidden className="w-3.5 h-3.5" />{Math.round(s.cpu.pct)}%</span>
       <span className={clsx('inline-flex items-center gap-1', tone(s.memory.pct), s.memory.pressure === 4 && 'text-hud-red')}>

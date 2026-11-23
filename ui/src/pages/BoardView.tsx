@@ -4,7 +4,8 @@
  * decides nothing itself: columns, lines and what a task waits for all come from core.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LayoutGroup, motion } from 'motion/react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { ArrowDown, ArrowUp, Bug, Layers, Link2, Play, Plus, Search, WifiOff, Zap } from 'lucide-react';
@@ -54,6 +55,21 @@ export default function BoardView() {
   const [project, setProject] = useState('');
   const [priority, setPriority] = useState<Priority | ''>('');
   const [kind, setKind] = useState<'' | 'bugs' | 'mine'>('');
+  // On a phone: the column shown. Starts where the owner is needed, if anywhere.
+  const [phoneCol, setPhoneCol] = useState<BoardColumn>('backlog');
+  const swipe = useRef<{ x: number; y: number } | null>(null);
+  const onSwipeStart = (e: React.TouchEvent) => { const t = e.touches[0]; swipe.current = t ? { x: t.clientX, y: t.clientY } : null; };
+  const onSwipeEnd = (e: React.TouchEvent) => {
+    const from = swipe.current;
+    const t = e.changedTouches[0];
+    swipe.current = null;
+    if (!from || !t) return;
+    const dx = t.clientX - from.x;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(t.clientY - from.y) * 1.5) return;
+    const i = COLUMNS.findIndex((c) => c.id === phoneCol);
+    const next = COLUMNS[Math.min(COLUMNS.length - 1, Math.max(0, i + (dx < 0 ? 1 : -1)))];
+    if (next) setPhoneCol(next.id);
+  };
   const load = useCallback(() => api.get('/tasks/overview').then((d) => { setTasks(d.tasks); setFailed(false); }).catch(() => setFailed(true)), []);
   useEffect(() => { void load(); }, [load]);
   const refresh = useThrottle(() => void load(), 1500);
@@ -78,6 +94,8 @@ export default function BoardView() {
   const recent = (t: OverviewItem) => t.group !== 'done' || Date.now() - t.updatedAt < WEEK;
   const shown = all.filter((t) => matches(t) && recent(t));
   const byId = new Map(all.map((t) => [t.id, t]));
+  const listFor = (col: BoardColumn) => col === 'backlog' ? backlog
+    : shown.filter((t) => columnOf(t) === col).sort((a, b) => col === 'done' ? b.updatedAt - a.updatedAt : backlogOrder(a, b));
   const initiatives = shown.filter((t) => t.board?.kind === 'initiative');
   const backlog = shown.filter((t) => columnOf(t) === 'backlog').sort(backlogOrder);
 
@@ -97,30 +115,30 @@ export default function BoardView() {
   const needYou = all.filter((t) => t.group === 'needs_you' && t.board?.kind !== 'initiative').length;
 
   return (
-    <div className="h-full flex flex-col p-4 md:p-5 gap-4 min-h-0">
+    <div className="h-full flex flex-col p-3 sm:p-4 md:p-5 gap-3 sm:gap-4 min-h-0">
       <PageHeader title="Board"
         subtitle={tasks ? `${open} open task${open === 1 ? '' : 's'}${needYou ? ` · ${needYou} need${needYou === 1 ? 's' : ''} you` : ''}` : 'Loading…'}
         actions={<Link to="/home/new" className={buttonClass('primary', 'md')}><Plus aria-hidden className="w-4 h-4" />New task</Link>} />
 
       <div className="flex flex-wrap gap-2 items-center" role="search">
-        <label className="relative w-56">
+        <label className="relative w-full sm:w-56">
           <span className="sr-only">Search tasks</span>
           <Search aria-hidden className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-hud-dim" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" className={clsx(controlClass(), 'pl-9')} />
         </label>
-        <div className="w-48">
+        <div className="flex-1 min-w-[7.5rem] sm:flex-none sm:w-48">
           <select aria-label="Project" value={project} onChange={(e) => setProject(e.target.value)} className={controlClass()}>
             <option value="">All projects</option>
             {projects.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
-        <div className="w-40">
+        <div className="flex-1 min-w-[7.5rem] sm:flex-none sm:w-40">
           <select aria-label="Priority" value={priority} onChange={(e) => setPriority(e.target.value as Priority | '')} className={controlClass()}>
             <option value="">All priorities</option>
             {(Object.keys(PRIORITY) as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY[p].label}</option>)}
           </select>
         </div>
-        <div className="w-40">
+        <div className="flex-1 min-w-[7.5rem] sm:flex-none sm:w-40">
           <select aria-label="Kind" value={kind} onChange={(e) => setKind(e.target.value as '' | 'bugs' | 'mine')} className={controlClass()}>
             <option value="">All cards</option>
             <option value="bugs">Bugs FryDay found{bugCount ? ` (${bugCount})` : ''}</option>
@@ -146,15 +164,32 @@ export default function BoardView() {
         </section>
       )}
 
-      <div className="flex-1 min-h-0 overflow-x-auto">
-        <div className="grid grid-flow-col auto-cols-[minmax(240px,1fr)] gap-3 h-full min-w-max">
+      {/* A phone shows one column at a time: tabs to choose it, or a swipe across the column. */}
+      <div role="tablist" aria-label="Columns" className="md:hidden -mx-1 flex gap-1 overflow-x-auto px-1 pb-1 flex-shrink-0">
+        {COLUMNS.map((col) => {
+          const n = listFor(col.id).length;
+          const active = col.id === phoneCol;
+          return (
+            <button key={col.id} type="button" role="tab" aria-selected={active} onClick={() => setPhoneCol(col.id)}
+              className={clsx('relative flex-shrink-0 rounded-full px-3 py-1.5 text-xs whitespace-nowrap transition-colors',
+                active ? 'text-hud-onaccent font-semibold' : col.id === 'needs_you' && n ? 'text-hud-amber' : 'text-hud-dim')}>
+              {active && <motion.span layoutId="col-pill" className="absolute inset-0 rounded-full bg-hud-cyan" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
+              <span className="relative">{col.title} {n}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <LayoutGroup>
+      <div className="flex-1 min-h-0 overflow-x-auto" onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd}>
+        <div className="grid grid-cols-1 h-full md:grid-cols-none md:grid-flow-col md:auto-cols-[minmax(250px,320px)] md:gap-3 md:w-max md:min-w-full">
           {COLUMNS.map((col) => {
-            const list = col.id === 'backlog' ? backlog
-              : shown.filter((t) => columnOf(t) === col.id).sort((a, b) => col.id === 'done' ? b.updatedAt - a.updatedAt : backlogOrder(a, b));
+            const list = listFor(col.id);
             const visible = col.id === 'done' ? list.slice(0, DONE_SHOWN) : list;
             return (
               <section key={col.id} aria-labelledby={`col-${col.id}`}
-                className={clsx('flex flex-col min-h-0 rounded-2xl border p-2', col.id === 'needs_you' && list.length ? 'border-hud-amber/40 bg-hud-amber/[0.04]' : 'border-hud-border bg-hud-bg/60')}>
+                className={clsx('flex-col min-h-0 rounded-2xl border p-2', col.id === phoneCol ? 'flex' : 'hidden md:flex',
+                  col.id === 'needs_you' && list.length ? 'border-hud-amber/40 bg-hud-amber/[0.04]' : 'border-hud-border bg-hud-bg/60')}>
                 <h2 id={`col-${col.id}`} className="flex items-baseline gap-2 px-1.5 pt-1 pb-2 text-sm font-semibold">
                   {col.title}<span className="text-xs font-normal text-hud-dim">{list.length}</span>
                   <span className="ml-auto text-[11px] font-normal text-hud-dim truncate">{col.hint}</span>
@@ -174,6 +209,7 @@ export default function BoardView() {
           })}
         </div>
       </div>
+      </LayoutGroup>
     </div>
   );
 }
@@ -186,7 +222,10 @@ function TaskCard({ item: t, backlog, canUp, canDown, onMove, onBoard, onStart }
   const p = PRIORITY[priorityOf(t)];
   const actor = b?.agent ? ACTOR_BY_NAME.get(b.agent.who) ?? 'fryday' : null;
   return (
-    <li className={clsx('rounded-xl border bg-hud-surface px-3 py-2.5 shadow-card', t.group === 'needs_you' ? 'border-hud-amber/40' : 'border-hud-border')}>
+    // A card that changes column glides to its new place (the same card, matched by its id).
+    <motion.li layout="position" layoutId={`card-${t.id}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+      className={clsx('rounded-xl border bg-hud-surface px-3 py-2.5 shadow-card hover:shadow-md transition-shadow', t.group === 'needs_you' ? 'border-hud-amber/40' : 'border-hud-border')}>
       <div className="flex items-start gap-1.5">
         <Badge tone={p.tone} className="flex-shrink-0">{p.label}</Badge>
         {b?.bug && <span title="A bug FryDay found and filed" className="flex-shrink-0 mt-0.5 text-hud-red"><Bug aria-label="Bug" className="w-3.5 h-3.5" /></span>}
@@ -250,7 +289,7 @@ function TaskCard({ item: t, backlog, canUp, canDown, onMove, onBoard, onStart }
           </span>
         </div>
       )}
-    </li>
+    </motion.li>
   );
 }
 

@@ -17,7 +17,7 @@ export default function HistoryView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <div className="max-w-4xl mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
       <section>
         <h1 className="text-xl font-bold mb-3">Finished tasks</h1>
         {failed ? <p className="text-sm text-hud-red">Could not load your tasks. Is FryDay running?</p> : tasks.length === 0 ? <p className="text-sm text-hud-dim">Nothing finished yet.</p> : (

@@ -17,7 +17,7 @@ export default function PageHeader({ title, subtitle, actions, level = 1, classN
   const Heading = level === 1 ? 'h1' : 'h2';
   return (
     <div className={clsx('flex flex-wrap items-start gap-x-4 gap-y-2', className)}>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-[min(100%,14rem)] flex-1">
         <Heading className={clsx('font-semibold tracking-tight text-hud-bright', level === 1 ? 'text-xl' : 'text-lg')}>{title}</Heading>
         {subtitle && <p className="mt-1 text-sm text-hud-dim">{subtitle}</p>}
       </div>

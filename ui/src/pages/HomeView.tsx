@@ -28,7 +28,7 @@ export default function HomeView({ details = false, creating = false }: { detail
     };
   }, [open, id]);
   return (
-    <div className="h-full grid grid-cols-1 md:grid-cols-[minmax(260px,30%)_1fr] gap-5 p-4 md:p-5">
+    <div className="h-full grid grid-cols-1 md:grid-cols-[minmax(260px,30%)_1fr] gap-5 p-2 sm:p-4 md:p-5">
       {/* p-1 -m-1: room for the selected task's ring inside the scrolling column. */}
       <div className={clsx('min-h-0 overflow-y-auto p-1 -m-1', (id || creating) && 'hidden md:block')}><TaskList selected={id ?? null} /></div>
       <div className={clsx('min-h-0 flex-col', id || creating ? 'flex' : 'hidden md:flex')}>{id ? <TaskView key={id} id={id} /> : <NewTask />}</div>

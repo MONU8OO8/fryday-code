@@ -144,10 +144,11 @@ export default function RunDrawer({ runId, onClose }: { runId: string | null; on
   const state = run ? RUN_STATE[live ? 'running' : run.state] ?? { label: run.state, tone: 'neutral' as const } : null;
 
   return createPortal(
-    <div className="fixed inset-0 z-40 flex justify-end" role="presentation">
+    <div className="fixed inset-0 z-40 flex items-end md:items-stretch justify-end" role="presentation">
       <button type="button" aria-label="Close" tabIndex={-1} className="absolute inset-0 bg-black/30" onClick={onClose} />
       <aside role="dialog" aria-modal="true" aria-label={`${run?.who ?? 'Agent'} run`}
-        className="flow-in relative flex h-full w-full max-w-2xl flex-col border-l border-hud-border bg-hud-surface shadow-xl">
+        className="drawer-in relative flex h-[88vh] md:h-full w-full max-w-2xl flex-col rounded-t-2xl md:rounded-none border-t md:border-t-0 md:border-l border-hud-border bg-hud-surface shadow-xl">
+        <span aria-hidden className="md:hidden mx-auto mt-2 h-1 w-10 rounded-full bg-hud-border" />
         <header className="border-b border-hud-border p-4">
           <div className="flex items-start gap-3">
             <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full" style={{ background: `${l.color}22`, color: l.color }}>

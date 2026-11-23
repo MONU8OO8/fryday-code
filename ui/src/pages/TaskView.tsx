@@ -82,16 +82,18 @@ export default function TaskView({ id }: { id: string }) {
     : choices ? 'the team could not finish on its own. Decide how to go on at the bottom.'
     : null;
   return (
-    <div className={clsx(cardClass('none'), 'flex flex-col h-full min-h-0 px-4 py-4 sm:px-6 sm:py-5')}>
-      <Link to="/home" className="md:hidden text-sm text-hud-cyan mb-2">← All tasks</Link>
+    <div className={clsx(cardClass('none'), 'flex flex-col h-full min-h-0 px-3 py-3 sm:px-6 sm:py-5')}>
+      <Link to="/board" className="md:hidden text-sm text-hud-cyan mb-1">← Board</Link>
       <PageHeader title={<span title={task.title} className="line-clamp-2 break-words">{task.title}</span>}
         subtitle={<>{story.board?.kind === 'initiative' ? `Split into ${story.board.children.length} tasks` : task.projectName ?? 'Project not chosen yet'} · started {ago(task.createdAt)} · {fmtTokens(task.budget.usedTokens)} of {fmtTokens(task.budget.limitTokens)} tokens</>}
         actions={<>
           {story.canStop && <Button variant="danger" size="sm" disabled={busy} onClick={stop}>Stop</Button>}
           <Link to={`/home/${id}/details`} className={buttonClass('ghost', 'sm')}>Who did what</Link>
         </>} />
-      <TeamStrip story={story} />
-      <JourneyLine key={id} journey={journey} />
+      {/* A phone keeps the chat in view: the team and the full journey are for wider screens. */}
+      <div className="hidden md:block"><TeamStrip story={story} /></div>
+      <div className="hidden md:block"><JourneyLine key={id} journey={journey} /></div>
+      <div className="md:hidden -mt-1 mb-2"><JourneyLine key={`${id}-c`} journey={journey} compact /></div>
       {story.board && (
         <BoardStrip board={story.board} notStarted={task.state === 'queued'} busy={busy}
           onChange={(change) => void act(() => api.patch(`/tasks/${encodeURIComponent(id)}/board`, change))}

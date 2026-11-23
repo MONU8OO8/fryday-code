@@ -83,9 +83,14 @@ Or run the same demo locally with `npx fryday-code demo` (see [Install](#install
   the Builder's first round passes, rounds to pass, what sends work back, tokens per task and runs
   stopped at a limit. Each task shows its acceptance criteria next to the planned tests and what the
   Checker and testers found for each.
+- **Works on a phone.** Under 768 px the dashboard switches to a bottom tab bar, the board shows one
+  column at a time (tabs or a swipe), the task page keeps the chat in view, drawers rise from the bottom,
+  and the Graph opens as a list. Cards glide between columns as tasks move, and everything that moves
+  stops when the system asks for reduced motion.
 - **Knows your projects without re-reading them.** Core reads each project's production branch without
   running anything from it (packages, scripts, env key names, routes, the services it calls) and draws
-  which project calls which on the Graph page. Links it guessed from names stay dashed until you confirm
+  which project calls which on the Graph page: drag, scroll or pinch to zoom, lines flow in the direction
+  of each call, picking a project lights up its neighbours, and projects with work in progress pulse. Links it guessed from names stay dashed until you confirm
   them; your edits survive every rescan. Agents get a short map of the project and its neighbours
   instead of exploring the repository again.
 - **Files and fixes the bugs it finds.** A check that already fails on your production branch, or a

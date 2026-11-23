@@ -592,7 +592,7 @@ export function taskStory(taskId: string): TaskStory | null {
   const approvals = (db.prepare('SELECT id, action, state, payload_json, requested_at, resolved_at FROM approvals WHERE task_id = ? ORDER BY requested_at').all(taskId) as Array<{ id: string; action: string; state: string; payload_json: string; requested_at: number; resolved_at: number | null }>)
     .map((a) => ({ id: a.id, action: a.action, state: a.state, payload: parsePayload(a.payload_json), requestedAt: a.requested_at, resolvedAt: a.resolved_at }));
   const release = db.prepare('SELECT id, state, started_at, head_sha FROM releases WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { id: string; state: string; started_at: number; head_sha: string | null } | undefined;
-  const deploy = db.prepare('SELECT id, state, started_at FROM deploys WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { id: string; state: string; started_at: number } | undefined;
+  const deploy = db.prepare('SELECT id, state, started_at, ended_at FROM deploys WHERE task_id = ? ORDER BY started_at DESC LIMIT 1').get(taskId) as { id: string; state: string; started_at: number; ended_at: number | null } | undefined;
   const projectName = projectNameOf(task);
   const note = taskMetadata(task)['note'];
   const has = projectHas(flow);
@@ -627,7 +627,8 @@ export function taskStory(taskId: string): TaskStory | null {
     agentEvents: messages.filter((m) => m.kind === 'event' && m.author !== 'fryday' && m.author !== 'owner').map((m) => ({ id: m.id, author: m.author, body: m.body, at: m.created_at })),
     approvals,
     release: release ? { id: release.id, state: release.state, at: release.started_at } : null,
-    deploy: deploy ? { id: deploy.id, state: deploy.state, at: deploy.started_at } : null,
+    // The outcome is said when the deploy ended: what happened during it (a prompt answered) comes first.
+    deploy: deploy ? { id: deploy.id, state: deploy.state, at: deploy.ended_at ?? deploy.started_at } : null,
     outcome,
     runStarts: runs.filter((r) => r.role !== 'fryday').map((r) => ({ role: r.role, at: r.started_at })),
     choices,

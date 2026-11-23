@@ -66,7 +66,7 @@ function RecentRun({ run, onOpen }: { run: LaneRun; onOpen: () => void }) {
   return (
     <li>
       <button type="button" onClick={onOpen}
-        className="grid w-full grid-cols-[4.5rem_1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-hud-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
+        className="grid w-full grid-cols-[3.75rem_1fr_auto] sm:grid-cols-[4.5rem_1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-hud-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hud-cyan/60">
         <span className="font-mono text-hud-cyan">{run.taskId ?? 'Chat'}{run.round > 0 ? <span className="text-hud-dim"> r{run.round}</span> : null}</span>
         <span className="truncate text-hud-bright">{run.taskTitle ?? ''}</span>
         <span className="flex items-center gap-2">
@@ -154,7 +154,7 @@ function ByRole({ roles, days, setDays }: { roles: RoleUsage[]; days: number; se
           const Icon = l.icon;
           const tokens = countedTokens(r);
           return (
-            <div key={r.role} className="grid grid-cols-[9rem_1fr_auto] items-center gap-3">
+            <div key={r.role} className="grid grid-cols-[6.5rem_1fr_auto] sm:grid-cols-[9rem_1fr_auto] items-center gap-2 sm:gap-3">
               <div className="flex min-w-0 items-center gap-1.5">
                 <Icon aria-hidden className="h-4 w-4 flex-shrink-0" style={{ color: l.color }} />
                 <span className="truncate text-sm text-hud-bright">{l.name}</span>
