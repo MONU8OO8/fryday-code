@@ -37,6 +37,7 @@ import { machineName } from '../platform.js';
 import { startService, serviceUnreachableReason, type RunningService, type ServiceFailure } from '../verify/service.js';
 import { apiTesterMcp, uiTesterMcp, removeRunMcp, findChrome, browserMarker, BROWSER_TOOL_PREFIX, SERVICE_REQUEST_TOOL, type RunMcp } from '../verify/tools.js';
 import { denyProxyPort, refusedSince } from '../verify/denyProxy.js';
+import { sweep, sweepBlocking, visitedPaths } from '../verify/sweep.js';
 import { grantsFor } from '../connections/store.js';
 import {
   VERIFY_SCHEMA, BROWSER_DIR, TESTER_NAME, TESTER_ROLE, emptyVerification, parseVerifyReport, reportPasses, verifyFeedback, verifySummary,
@@ -121,27 +122,85 @@ export function verificationOf(taskId: string, round: number): Verification | nu
   }
 }
 
-/** Keep the screenshots the UI tester took, where the owner can see them after the checkout is gone. */
-function keepEvidence(a: Pick<Active, 'taskId' | 'round' | 'checkout'>): string[] {
+/**
+ * Keep the screenshots the UI tester took, where the owner can see them after the checkout is
+ * gone. Called while the tester works (each new picture shows in the chat) and once at the end.
+ * Only plain image files from the tester's own output folder are copied.
+ */
+function keepEvidence(a: Pick<Active, 'taskId' | 'round' | 'checkout'>, already: string[] = []): string[] {
   const from = path.join(a.checkout, BROWSER_DIR);
   let names: string[];
   try {
-    names = fs.readdirSync(from).filter((n) => /^[\w.-]+\.(png|jpe?g)$/i.test(n)).sort();
+    names = fs.readdirSync(from).filter((n) => /^[\w.-]+\.(png|jpe?g)$/i.test(n) && !n.startsWith('sweep-')).sort();
   } catch {
-    return [];
+    return already;
   }
   const to = evidenceDir(a.taskId, a.round);
-  fs.rmSync(to, { recursive: true, force: true });
-  const kept: string[] = [];
-  for (const name of names.slice(-MAX_EVIDENCE_FILES)) {
+  const kept = [...already];
+  for (const name of names) {
+    if (kept.includes(name)) continue;
+    if (kept.length >= MAX_EVIDENCE_FILES) break;
     const source = path.join(from, name);
-    const stat = fs.lstatSync(source);
-    if (!stat.isFile() || stat.size > MAX_EVIDENCE_BYTES) continue;
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(source); } catch { continue; }
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_EVIDENCE_BYTES) continue;
     fs.mkdirSync(to, { recursive: true });
     fs.copyFileSync(source, path.join(to, name));
     kept.push(name);
   }
   return kept;
+}
+
+// ─── Pictures as they are taken ───────────────────────────────────────────────
+
+const watchers = new Map<string, { watcher: fs.FSWatcher; timer: NodeJS.Timeout | null }>();
+
+/** While the UI tester works, every new screenshot is kept and shown in the chat at once. */
+function watchScreenshots(a: Active): void {
+  stopWatching(a.taskId);
+  const dir = path.join(a.checkout, BROWSER_DIR);
+  fs.mkdirSync(dir, { recursive: true });
+  const entry = { watcher: null as unknown as fs.FSWatcher, timer: null as NodeJS.Timeout | null };
+  const pick = () => {
+    entry.timer = null;
+    if (active.get(a.taskId) !== a) return;
+    const before = a.verification.evidence.length;
+    a.verification.evidence = keepEvidence(a, a.verification.evidence);
+    if (a.verification.evidence.length > before) {
+      save(a.taskId, a.round, a.verification);
+      sseEmit({ type: 'verify_shot', taskId: a.taskId, round: a.round, names: a.verification.evidence.slice(before) });
+    }
+  };
+  try {
+    // A screenshot is written in pieces: look a moment after the folder last changed.
+    entry.watcher = fs.watch(dir, () => { if (entry.timer) clearTimeout(entry.timer); entry.timer = setTimeout(pick, 400); });
+    watchers.set(a.taskId, entry);
+  } catch {
+    /* no live pictures on this machine: they are still kept at the end */
+  }
+}
+
+function stopWatching(taskId: string): void {
+  const w = watchers.get(taskId);
+  if (!w) return;
+  if (w.timer) clearTimeout(w.timer);
+  w.watcher.close();
+  watchers.delete(taskId);
+}
+
+/** Core's own look at the visited pages at phone, tablet and desktop size, after the UI tester passed. */
+async function sizeSweep(a: Active, runId: string): Promise<void> {
+  const chrome = findChrome();
+  if (!chrome) return;
+  const row = getDb().prepare('SELECT log_path FROM runs WHERE id = ?').get(runId) as { log_path: string } | undefined;
+  let log = '';
+  try { log = row ? fs.readFileSync(row.log_path, 'utf8') : ''; } catch { /* the start page is still swept */ }
+  setTaskNote(a.taskId, `Round ${a.round}: checking the pages at phone, tablet and desktop size`);
+  a.verification.sweep = await sweep({
+    origin: a.service.origin, paths: visitedPaths(log, a.service.origin, a.profile.uiPath), chromePath: chrome,
+    denyProxyPort: await denyProxyPort(), servicePort: a.service.port, key: a.taskId, evidenceDir: evidenceDir(a.taskId, a.round),
+  });
+  save(a.taskId, a.round, a.verification);
 }
 
 /** A browser the tester's own process did not take down with it. */
@@ -158,6 +217,7 @@ function stopLeftoverBrowser(key: string): void {
 /** Stop the service and remove everything this verification created. Safe to call twice. */
 async function finish(a: Active, status: Verification['status'], note?: string): Promise<Verification> {
   if (!active.delete(a.taskId)) return a.verification;
+  stopWatching(a.taskId);
   removeRunMcp(a.current?.mcp);
   a.current = null;
   try {
@@ -166,7 +226,7 @@ async function finish(a: Active, status: Verification['status'], note?: string):
     console.error(`[fryday-core] ${a.taskId}: could not stop the service under test:`, err);
   }
   stopLeftoverBrowser(a.taskId);
-  a.verification.evidence = keepEvidence(a);
+  a.verification.evidence = keepEvidence(a, a.verification.evidence);
   a.verification.status = status;
   if (note) a.verification.note = note;
   removeCheckout(a.ws.repo_path, a.checkout);
@@ -237,6 +297,8 @@ export async function verifyRound(host: VerifyHost, taskId: string, round: numbe
     waiting.delete(taskId);
   }
   const v = emptyVerification();
+  // Pictures from an earlier try of this round are not this try's.
+  fs.rmSync(evidenceDir(taskId, round), { recursive: true, force: true });
   const stopEarly = (status: Verification['status'], note: string): Verification => {
     removeCheckout(ws.repo_path, checkout);
     v.status = status;
@@ -403,6 +465,7 @@ async function startNext(host: VerifyHost, a: Active): Promise<void> {
     return;
   }
   a.current = { kind, runId: handle.runId, mcp, startedAt: Date.now() };
+  if (kind === 'ui') watchScreenshots(a);
   save(taskId, round, a.verification);
 }
 
@@ -420,6 +483,8 @@ export function onTesterRunExit(host: VerifyHost, exit: RunExit, run: TesterRun)
   const { kind, mcp, startedAt } = a.current;
   a.current = null;
   removeRunMcp(mcp);
+  stopWatching(taskId);
+  if (kind === 'ui') a.verification.evidence = keepEvidence(a, a.verification.evidence);
   const name = TESTER_NAME[kind];
   const role = TESTER_ROLE[kind];
 
@@ -469,6 +534,15 @@ export function onTesterRunExit(host: VerifyHost, exit: RunExit, run: TesterRun)
       const v = await finish(a, 'failed');
       host.sendBack(taskId, a.round, verifyFeedback(a.round, v), verifySummary(v));
       return;
+    }
+    if (kind === 'ui') {
+      await sizeSweep(a, exit.runId);
+      if (active.get(taskId) !== a) return; // stopped while sweeping
+      if (sweepBlocking(a.verification.sweep).length) {
+        const v = await finish(a, 'failed', 'A page does not fit a phone or tablet screen.');
+        host.sendBack(taskId, a.round, verifyFeedback(a.round, v), verifySummary(v));
+        return;
+      }
     }
     save(taskId, a.round, a.verification);
     await startNext(host, a);

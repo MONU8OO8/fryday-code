@@ -43,6 +43,13 @@ export type StoryAction =
   /** A task the Lead proposes in another project. startedTaskId: it was started as that task. */
   | { kind: 'start_task'; messageId: number; projectName: string; title: string; description: string; startedTaskId: string | null };
 
+/** A picture in the chat: a screenshot core kept, served by the evidence route. Never a file path. */
+export interface StoryMedia {
+  src: string;
+  device: 'phone' | 'tablet' | 'desktop' | null;
+  caption: string;
+}
+
 export interface StoryItem {
   /** Stable between calls, so the UI animates only new items. */
   id: string;
@@ -54,6 +61,7 @@ export interface StoryItem {
   round: number | null;
   details: { label: string; ref: DetailRef } | null;
   action: StoryAction | null;
+  media?: StoryMedia[];
 }
 
 export interface StoryNow {
@@ -317,6 +325,16 @@ export function buildStory(input: StoryInput): StoryItem[] {
       });
       continue;
     }
+    const shot = (name: string): string => `/api/tasks/${encodeURIComponent(t.id)}/evidence/${r.round}/${encodeURIComponent(name)}`;
+    // What the Page tester saw, as it takes the pictures: the chat fills in while it works.
+    if (v.evidence.length > 0) {
+      const live = v.status === 'running' && !v.testers.some((x) => x.kind === 'ui');
+      add({
+        id: `verify:${r.round}:shots`, at: at + 3, from: 'page_tester', kind: 'said', round: r.round, details,
+        text: live ? `Trying the pages in a browser: ${v.evidence.length} screenshot${v.evidence.length === 1 ? '' : 's'} so far.` : `What I saw in the browser (${v.evidence.length} screenshot${v.evidence.length === 1 ? '' : 's'}).`,
+        media: v.evidence.slice(-12).map((name) => ({ src: shot(name), device: null, caption: 'Page tester' })),
+      });
+    }
     for (const tester of v.testers) {
       const who: Actor = tester.kind === 'api' ? 'app_tester' : 'page_tester';
       const tried = tester.kind === 'api' ? `Tried the app ${times(tester.calls)}` : `Used the pages ${times(tester.calls)}`;
@@ -328,6 +346,22 @@ export function buildStory(input: StoryInput): StoryItem[] {
           text: `${tried}. ${said(tester.report?.summary ?? 'It did not work as planned.', 200)} Back to you.`,
         });
       }
+    }
+    // Core's own check of the same pages at three sizes.
+    if (v.sweep && v.sweep.pages.length > 0) {
+      const pages = v.sweep.pages;
+      const blocking = pages.flatMap((p) => p.issues.filter((i) => i.severity === 'blocking').map((i) => ({ p, i })));
+      const minor = pages.reduce((n, p) => n + p.issues.filter((i) => i.severity === 'minor').length, 0);
+      const where = (p: { path: string }) => (p.path === '/' ? 'the start page' : `the page ${clip(p.path, 60)}`);
+      const text = blocking.length
+        ? `On a ${blocking[0]!.i.device} ${where(blocking[0]!.p)} is wider than the screen, so it scrolls sideways${blocking.length > 1 ? ` (and ${blocking.length - 1} more like it)` : ''}. Back to you.`
+        : `Checked ${pages.length === 1 ? where(pages[0]!) : `${pages.length} pages`} on a phone, a tablet and a desktop: ${pages.length === 1 ? 'it fits' : 'they fit'}${minor ? `. ${minor} small thing${minor === 1 ? '' : 's'} to look at (small tap targets, small text or errors)` : ''}.`;
+      add({
+        id: `verify:${r.round}:sweep`, at: at + 4, from: 'fryday', to: blocking.length ? 'builder' : null, kind: blocking.length ? 'sendback' : 'said', round: r.round, details, text,
+        media: pages.slice(0, 3).flatMap((p) => (['phone', 'tablet', 'desktop'] as const).flatMap((d) => (p.shots[d] ? [{ src: shot(p.shots[d]!), device: d, caption: p.path === '/' ? 'Start page' : clip(p.path, 40) }] : []))),
+      });
+    } else if (v.sweep?.error) {
+      add({ id: `verify:${r.round}:sweep`, at: at + 4, from: 'fryday', kind: 'said', round: r.round, details, text: 'The pages could not be checked at phone, tablet and desktop size this time.' });
     }
   }
 

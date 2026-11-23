@@ -9,6 +9,7 @@ import clsx from 'clsx';
 import type { StoryItem, StoryNow } from '../storyTypes';
 import { ACTORS } from '../plain';
 import { Avatar, Button, controlClass } from '../ui';
+import { MediaStrip } from './DeviceFrame';
 
 interface Props {
   taskId: string;
@@ -71,6 +72,7 @@ function ChatItem({ taskId, item, fresh, busy, answeredBelow, onAnswer, onDecide
           mine ? 'rounded-br-sm bg-hud-cyan text-hud-onaccent' : item.kind === 'sendback' ? 'rounded-bl-sm bg-hud-amber/10 border border-hud-amber/30' : item.kind === 'outcome' ? 'rounded-bl-sm bg-hud-green/10 border border-hud-green/30' : 'rounded-bl-sm bg-hud-border/50')}>
           {!mine && <span className="font-semibold mr-1">{head}</span>}
           <RichText text={item.text} />
+          {item.media && item.media.length > 0 && <MediaStrip media={item.media} />}
           {item.details && (
             <Link to={`/home/${taskId}/details`} className={clsx('block mt-0.5 text-xs underline-offset-2 hover:underline', mine ? 'text-hud-onaccent/80' : 'text-hud-cyan')}>
               {item.details.label}

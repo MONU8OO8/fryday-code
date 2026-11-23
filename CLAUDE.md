@@ -37,6 +37,9 @@ this repo decides what those agents can touch. Treat every change as security-re
   test in `core/test/mcpGuard.test.ts` and a probe in `core/scripts/redteam-verify.ts`. MCP servers
   run outside the sandbox: only core's own code, a version-pinned package, or a server the developer
   turned on may be started for an agent.
+- Core's own browser (the viewport sweep, `core/src/verify/sweep.ts`) opens only the service under
+  test, with the same locked arguments as the tester's browser (`lockedBrowserArgs` in
+  `core/src/verify/tools.ts`). Never give it another address or a profile with the developer's data.
 - A tester agent reaches the service under test through core's tool, never from its shell, and reads
   data only through connections marked local or staging and read-only. Production is never granted:
   that is a CHECK in the database as well as code (`core/src/connections/store.ts`).

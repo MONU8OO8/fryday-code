@@ -681,11 +681,32 @@ function onPlannerExit(exit: RunExit, run: RunRow): void {
     return;
   }
   getDb().prepare('UPDATE tasks SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), taskId);
+  nudgeAboutPageTester(taskId, plan);
   sseEmit({ type: 'plan_ready', taskId });
   background(taskId, 'Starting the coder', () => startCoder(taskId, 1, null));
 }
 
 // ─── Coding ───────────────────────────────────────────────────────────────────
+
+const PAGE_FILE = /\.(tsx|jsx|vue|svelte|html?|css|scss|sass|less)$/i;
+
+/**
+ * A change to pages in a project where FryDay cannot open them: say so once, with what would let
+ * it check the pages on a phone, a tablet and a desktop. Nothing is changed for the owner.
+ */
+function nudgeAboutPageTester(taskId: string, plan: Plan): void {
+  const ws = activeWorkspace(taskId);
+  const repo = ws ? getRepo(ws.repo_id) : undefined;
+  if (!repo || !plan.files.some((f) => PAGE_FILE.test(f))) return;
+  const profile = runProfileOf(repo);
+  if (profile?.ui) return;
+  const task = getTask(taskId)!;
+  if (taskMetadata(task)['pageTesterNudged']) return;
+  updateTaskMetadata(taskId, { pageTesterNudged: true });
+  addMessage(taskId, 'fryday', 'reply', profile
+    ? `This change touches pages of ${repo.name}, but its Page tester is off, so nobody will open them in a browser. Turn it on in ${repo.name}'s run profile on the Projects page and I will also check them on a phone, a tablet and a desktop.`
+    : `This change touches pages of ${repo.name}, but ${repo.name} has no run profile, so I cannot start it to look at them. Add one on the Projects page (how to start it, its port, and the Page tester on) and I will try the pages in a browser and check them on a phone, a tablet and a desktop.`);
+}
 
 /** How long after a Builder run its prompt cache is still warm enough to resume it cheaply. */
 const WARM_RESUME_MS = 4 * 60_000;

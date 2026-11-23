@@ -62,6 +62,7 @@
     "@playwright/mcp": "0.0.86",
     "better-sqlite3": "^9.6.0",
     "express": "^5.3.0",
+    "playwright-core": "1.66.0-alpha-2026-11-18",
     "sqlite-vec": "0.1.9",
     "tsx": "^4.23.15",
     "zod": "^3.23.8"

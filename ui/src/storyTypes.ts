@@ -40,7 +40,11 @@ export interface StoryItem {
   round: number | null;
   details: { label: string; ref: DetailRef } | null;
   action: StoryAction | null;
+  /** Screenshots core kept, served by the evidence route. */
+  media?: StoryMedia[];
 }
+
+export interface StoryMedia { src: string; device: 'phone' | 'tablet' | 'desktop' | null; caption: string }
 
 export interface StoryNow { actor: Actor; text: string; since: number }
 

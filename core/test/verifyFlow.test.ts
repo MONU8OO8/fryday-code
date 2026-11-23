@@ -304,6 +304,11 @@ test('the API tester and then the UI tester use the same running service; screen
     const v = getRounds(id)[0]!.verify!;
     assert.deepEqual(v.testers.map((t) => [t.kind, t.calls, t.passed]), [['api', 3, true], ['ui', 6, true]]);
     assert.deepEqual(v.evidence, ['page-cart.png']);
+    // Core then opened the page the tester used at three sizes, through the same locked browser.
+    assert.equal(v.sweep?.error, undefined);
+    assert.deepEqual(v.sweep!.pages.map((p) => p.path), ['/cart']);
+    for (const name of Object.values(v.sweep!.pages[0]!.shots)) assert.ok(fs.existsSync(path.join(evidenceDir(id, 1), name!)), `${name} kept`);
+    assert.deepEqual(Object.keys(v.sweep!.pages[0]!.shots), ['phone', 'tablet', 'desktop']);
     assert.ok(fs.existsSync(path.join(evidenceDir(id, 1), 'page-cart.png')), 'kept after the checkout is gone');
     assert.match(note(id), /API tester: 3 requests; UI tester: 6 browser steps/);
     await assertCleanedUp(id, v.service?.port);

@@ -149,8 +149,14 @@ In more detail:
 - **Trying it out running.** For a project with a run profile, FryDay Code starts the project as a
   service (in the sandbox, from the reviewed commit). The **App tester** sends requests and checks the
   answers, and can read data you granted it; the **Page tester** opens the pages in Chrome, clicks
-  through them and takes screenshots. Their reports give what was sent and what came back for every
-  criterion.
+  through them and takes screenshots, which appear in the task chat as they are taken. It also tries the
+  changed pages at phone width. Then FryDay itself opens every page the Page tester visited on a phone
+  (390×844, touch), a tablet (768×1024) and a desktop (1280×800), shows the three screenshots side by side
+  in the chat, and checks the layout the same way every time: a page wider than a phone or tablet screen
+  goes back to the Builder with the picture; small tap targets, tiny text, a missing mobile viewport,
+  console errors and failed requests are reported. When a change touches pages but the project's Page
+  tester is off, the chat says so and how to turn it on. Their reports give what was sent and what came
+  back for every criterion.
 - **Approval.** A ticket for one exact commit, listing every push it will make. If the branch moves,
   the ticket is void.
 - **Continued branches.** Work that continued a branch of your own is pushed back to that branch on

@@ -156,6 +156,37 @@ export interface UiTesterMcpOptions {
 /** A word on the browser's command line that identifies this run, so a browser left behind can be found and stopped. */
 export const browserMarker = (key: string) => `--fryday-run=${key}`;
 
+/**
+ * The browser's command line for anything core opens against a service under test: everything
+ * goes to a proxy that refuses it, except the service itself. Shared by the UI tester's browser
+ * and core's own viewport sweep, so both are held the same way.
+ */
+export function lockedBrowserArgs(denyProxyPort: number, servicePort: number, key: string): string[] {
+  return [
+    // Everything goes to a proxy that refuses it, except the service under test.
+    // "<-loopback>" takes away the browser's built-in exception for this machine.
+    `--proxy-server=http://127.0.0.1:${denyProxyPort}`,
+    `--proxy-bypass-list=<-loopback>;127.0.0.1:${servicePort};localhost:${servicePort};[::1]:${servicePort}`,
+    // The browser's own traffic (updates, sign-in, safe browsing, metrics) is refused
+    // by the proxy anyway; switching it off keeps it out of what is reported.
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-sync',
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disable-client-side-phishing-detection',
+    '--disable-domain-reliability',
+    '--metrics-recording-only',
+    '--no-pings',
+    '--disable-features=OptimizationHints,MediaRouter,Translate,AutofillServerCommunication,CertificateTransparencyComponentUpdater,InterestFeedContentSuggestions',
+    '--no-first-run',
+    '--no-default-browser-check',
+    // WebRTC could otherwise talk past the proxy.
+    '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+    browserMarker(key),
+  ];
+}
+
 export function uiTesterMcp(opts: UiTesterMcpOptions): RunMcp {
   const files: string[] = [];
   const { port } = opts.service;
@@ -167,29 +198,7 @@ export function uiTesterMcp(opts: UiTesterMcpOptions): RunMcp {
       launchOptions: {
         executablePath: opts.chromePath,
         headless: true,
-        args: [
-          // Everything goes to a proxy that refuses it, except the service under test.
-          // "<-loopback>" takes away the browser's built-in exception for this machine.
-          `--proxy-server=http://127.0.0.1:${opts.denyProxyPort}`,
-          `--proxy-bypass-list=<-loopback>;127.0.0.1:${port};localhost:${port};[::1]:${port}`,
-          // The browser's own traffic (updates, sign-in, safe browsing, metrics) is refused
-          // by the proxy anyway; switching it off keeps it out of what is reported.
-          '--disable-background-networking',
-          '--disable-component-update',
-          '--disable-sync',
-          '--disable-default-apps',
-          '--disable-extensions',
-          '--disable-client-side-phishing-detection',
-          '--disable-domain-reliability',
-          '--metrics-recording-only',
-          '--no-pings',
-          '--disable-features=OptimizationHints,MediaRouter,Translate,AutofillServerCommunication,CertificateTransparencyComponentUpdater,InterestFeedContentSuggestions',
-          '--no-first-run',
-          '--no-default-browser-check',
-          // WebRTC could otherwise talk past the proxy.
-          '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-          browserMarker(opts.key),
-        ],
+        args: lockedBrowserArgs(opts.denyProxyPort, port, opts.key),
       },
       contextOptions: { viewport: { width: 1280, height: 800 } },
     },

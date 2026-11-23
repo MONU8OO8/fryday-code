@@ -491,3 +491,25 @@ test('the same approval given several times in a row is said once, with how ofte
   assert.deepEqual(items.filter((i) => i.kind === 'approval').map((i) => i.id), ['approval:a3', 'approval:a4', 'approval:a5']);
   assert.equal(items.find((i) => i.id === 'approval:a5')!.action?.kind, 'approve', 'the one still waiting keeps its buttons');
 });
+
+test('screenshots show in the chat while the Page tester works, and the three-size check shows each page on a phone, a tablet and a desktop', () => {
+  const v = (over: Partial<Verification>): Verification => ({ status: 'running', service: null, dataConnections: [], unavailable: [], refused: [], evidence: [], testers: [], ...over });
+  const live = buildStory(base({ rounds: [round(1, 400, { met: [true], verify: v({ evidence: ['page-1.png', 'page-2.png'] }) })] })).find((i) => i.id === 'verify:1:shots')!;
+  assert.equal(live.text, 'Trying the pages in a browser: 2 screenshots so far.');
+  assert.deepEqual(live.media!.map((m) => [m.src, m.device]), [['/api/tasks/T-1/evidence/1/page-1.png', null], ['/api/tasks/T-1/evidence/1/page-2.png', null]]);
+
+  const page = (p: string, issues: NonNullable<Verification['sweep']>['pages'][number]['issues'] = []) => ({ path: p, shots: { phone: `sweep-${p.length}-phone.jpg`, tablet: `sweep-${p.length}-tablet.jpg`, desktop: `sweep-${p.length}-desktop.jpg` }, issues });
+  const fits = buildStory(base({ rounds: [round(1, 400, { met: [true], verify: v({ status: 'passed', evidence: ['page-1.png'], sweep: { pages: [page('/'), page('/cart', [{ device: 'phone', kind: 'small_target', severity: 'minor', detail: 'x' }])] } }) })] }));
+  const sweep = fits.find((i) => i.id === 'verify:1:sweep')!;
+  assert.equal(sweep.from, 'fryday');
+  assert.equal(sweep.kind, 'said');
+  assert.equal(sweep.text, 'Checked 2 pages on a phone, a tablet and a desktop: they fit. 1 small thing to look at (small tap targets, small text or errors).');
+  assert.deepEqual(sweep.media!.map((m) => `${m.caption}:${m.device}`), ['Start page:phone', 'Start page:tablet', 'Start page:desktop', '/cart:phone', '/cart:tablet', '/cart:desktop']);
+  assert.equal(fits.find((i) => i.id === 'verify:1:shots')!.text, 'What I saw in the browser (1 screenshot).');
+  assert.ok(sweep.media!.every((m) => m.src.startsWith('/api/tasks/T-1/evidence/1/sweep-')), 'only evidence addresses, never a path on the machine');
+
+  const wide = buildStory(base({ rounds: [round(1, 400, { met: [true], verify: v({ status: 'failed', sweep: { pages: [page('/orders', [{ device: 'phone', kind: 'overflow', severity: 'blocking', detail: 'wide' }])] } }) })] })).find((i) => i.id === 'verify:1:sweep')!;
+  assert.equal(wide.text, 'On a phone the page /orders is wider than the screen, so it scrolls sideways. Back to you.');
+  assert.equal(wide.kind, 'sendback');
+  assert.equal(wide.to, 'builder');
+});

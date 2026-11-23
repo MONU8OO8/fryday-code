@@ -843,3 +843,17 @@ test('repo guidance is read from the given roots, once per file, and capped', ()
   assert.equal(readGuidance([path.join(tmp, 'missing')]), '');
   assert.match(readGuidance([a], 10), /\[repo guidance cut at 10 characters\]$/);
 });
+
+test('a plan that changes pages in a project FryDay cannot open says so once, with how to let it check them', { skip }, async () => {
+  script({ planner: { ...PLAN, files: [...PLAN.files, 'src/views/Cart.tsx'] }, coder: [good] });
+  const id = addTask('Show mul on the cart page');
+  assert.equal(await runToRest(id), 'awaiting_approval');
+  const said = listMessages(id).filter((m) => m.author === 'fryday' && m.kind === 'reply').map((m) => m.body);
+  assert.equal(said.length, 1);
+  assert.match(said[0]!, /^This change touches pages of .+, but .+ has no run profile, so I cannot start it to look at them\. Add one on the Projects page .* check them on a phone, a tablet and a desktop\.$/);
+
+  script({ coder: [good] });
+  const plain = addTask('Add mul only');
+  assert.equal(await runToRest(plain), 'awaiting_approval');
+  assert.equal(listMessages(plain).filter((m) => m.author === 'fryday' && m.kind === 'reply').length, 0, 'no pages, nothing said');
+});

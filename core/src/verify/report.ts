@@ -8,6 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import type { Plan } from '../pipeline/review.js';
 import { budgetedDiff } from '../pipeline/diffBudget.js';
+import { sweepBlocking, sweepFeedback, type SweepResult } from './sweep.js';
 
 export type TesterKind = 'api' | 'ui';
 export const TESTER_ROLE = { api: 'api_tester', ui: 'ui_tester' } as const;
@@ -112,6 +113,8 @@ export interface Verification {
   refused: string[];
   /** Screenshot files kept for the owner. */
   evidence: string[];
+  /** Core's own check of the visited pages at phone, tablet and desktop size (sweep.ts). */
+  sweep?: SweepResult;
   note?: string;
 }
 
@@ -149,6 +152,9 @@ export function verifyFeedback(round: number, v: Verification): string {
   for (const record of v.testers.filter((t) => !t.passed && t.report)) {
     parts.push(`## What the ${TESTER_NAME[record.kind]} found\n\n${record.report!.summary}\n\n${findings(record)}`);
   }
+  if (v.sweep && sweepBlocking(v.sweep).length) {
+    parts.push(`## The pages at phone, tablet and desktop size\n\nA page that is wider than the screen scrolls sideways on a phone: fix the layout so it fits (no fixed widths wider than the screen, wrap or stack what does not fit). The other lines are worth fixing too if your change caused them.\n\n${sweepFeedback(v.sweep)}`);
+  }
   return parts.join('\n\n');
 }
 
@@ -162,6 +168,8 @@ export function verifySummary(v: Verification): string {
     const counts = [unmet ? `${unmet} criteri${unmet === 1 ? 'on' : 'a'} not met` : '', blocking ? `${blocking} blocking issue${blocking === 1 ? '' : 's'}` : ''].filter(Boolean).join(', ');
     return `${TESTER_NAME[t.kind]}: ${counts || t.report.summary}`;
   });
+  const sized = sweepBlocking(v.sweep);
+  if (sized.length) reasons.push(`at ${[...new Set(sized.map((i) => i.device))].join(' and ')} size a page is wider than the screen`);
   return reasons.join('; ') || v.note || 'no reason recorded';
 }
 
